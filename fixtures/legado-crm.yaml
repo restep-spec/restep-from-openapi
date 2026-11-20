@@ -1,0 +1,165 @@
+openapi: 3.1.0
+info:
+  title: CRM heredado
+  version: "2.3"
+servers:
+  - url: https://crm.example.com
+paths:
+  /api/v2/getContacts:
+    get:
+      summary: Devuelve los contactos.
+      parameters:
+        - $ref: '#/components/parameters/ApiVersion'
+        - name: $top
+          in: query
+          schema: { type: integer }
+        - name: $filter
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Contactos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Contact' }
+  /api/v2/accounts:
+    get:
+      summary: Cuentas de clientes.
+      parameters:
+        - $ref: '#/components/parameters/ApiVersion'
+        - name: since
+          in: query
+          description: Fecha mínima de alta
+          schema: { type: string, format: date }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [asc, desc] }
+        - name: expand
+          in: query
+          schema: { type: string }
+        - name: modified_since
+          in: query
+          schema: { type: string, format: date-time }
+        - name: page_token
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Página
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+                  nextPageToken: { type: [string, 'null'] }
+        default:
+          description: Error
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Fault' }
+    post:
+      summary: Crea una cuenta.
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Account' }
+      responses:
+        '201':
+          description: Creada
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+  /api/v2/accounts/{accountId}:
+    get:
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: La cuenta
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+    patch:
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Account' }
+      responses:
+        '200':
+          description: Actualizada
+  /api/v2/accounts/bulk:
+    post:
+      summary: Importa muchas cuentas.
+      responses:
+        '202':
+          description: Aceptado
+  /api/v2/accounts/{accountId}/contacts/search:
+    post:
+      summary: Busca contactos de una cuenta.
+      responses:
+        '200':
+          description: Resultados
+webhooks:
+  accountChanged:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Account' }
+      responses:
+        '200':
+          description: Recibido
+components:
+  parameters:
+    ApiVersion:
+      name: Api-Version
+      in: header
+      schema: { type: string }
+  schemas:
+    Fault:
+      type: object
+      properties:
+        errorCode: { type: string }
+        message: { type: string }
+    Contact:
+      type: object
+      properties:
+        contactId: { type: string }
+        fullName: { type: string }
+        accountId: { type: string }
+    Account:
+      type: object
+      properties:
+        id: { type: string }
+        legalName: { type: string }
+        balance: { type: number }
+        owner: { $ref: '#/components/schemas/Account' }
+        created_at: { type: string }
+  securitySchemes:
+    key:
+      type: apiKey
+      in: query
+      name: api_key

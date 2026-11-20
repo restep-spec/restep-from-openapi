@@ -1,0 +1,24 @@
+{
+  "name": "restep-from-openapi",
+  "version": "0.1.0",
+  "description": "Dice qué le falta a una API descrita en OpenAPI para cumplir Restep 1 y escribe un borrador de su descubrimiento",
+  "type": "module",
+  "bin": {
+    "restep-from-openapi": "restep-from-openapi.mjs"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/restep-spec/restep-from-openapi.git"
+  },
+  "homepage": "https://restep.wubytes.com/tools/",
+  "bugs": {
+    "url": "https://github.com/restep-spec/restep-from-openapi/issues"
+  },
+  "scripts": {
+    "test": "node test.mjs"
+  }
+}

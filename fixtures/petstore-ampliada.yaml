@@ -1,0 +1,345 @@
+# Tienda de mascotas al estilo del Petstore clásico, ampliada con pedidos, usuarios y
+# los vicios habituales: paginación por página, arrays sueltos, PUT, errores propios...
+openapi: 3.0.3
+info:
+  title: Petstore ampliada
+  version: 1.4.0
+  description: >
+    Una tienda de mascotas de ejemplo, ampliada para probar restep-from-openapi.
+servers:
+  - url: https://petstore.example.com/api/v1
+tags:
+  - name: pets
+    description: Mascotas a la venta en la tienda.
+  - name: orders
+    description: Pedidos de los clientes.
+paths:
+  /pets:
+    get:
+      tags: [pets]
+      summary: Lista las mascotas a la venta.
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, maximum: 100 }
+        - name: status
+          in: query
+          description: Estado de la mascota
+          schema:
+            type: string
+            enum: [available, pending, sold]
+        - name: tags
+          in: query
+          schema:
+            type: array
+            items: { type: string }
+        - name: min_price
+          in: query
+          schema: { type: number }
+        - name: max_price
+          in: query
+          schema: { type: number }
+        - name: sort_by
+          in: query
+          schema:
+            type: string
+            enum: [name, price, createdAt]
+        - name: order
+          in: query
+          schema: { type: string, enum: [asc, desc] }
+        - name: q
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Las mascotas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+        '400':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [pets]
+      summary: Da de alta una mascota.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewPet'
+      responses:
+        '200':
+          description: Creada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        '422':
+          $ref: '#/components/responses/Error'
+  /pets/{petId}:
+    parameters:
+      - name: petId
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      tags: [pets]
+      summary: Devuelve una mascota.
+      responses:
+        '200':
+          description: La mascota
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        '404':
+          $ref: '#/components/responses/Error'
+    put:
+      tags: [pets]
+      summary: Sustituye una mascota.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewPet'
+      responses:
+        '200':
+          description: Actualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+    post:
+      tags: [pets]
+      summary: Cambia el nombre con un formulario.
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+      responses:
+        '200':
+          description: Cambiada
+    delete:
+      tags: [pets]
+      summary: Borra una mascota.
+      responses:
+        '200':
+          description: Borrada
+        '404':
+          $ref: '#/components/responses/Error'
+  /pets/findByStatus:
+    get:
+      tags: [pets]
+      summary: Busca mascotas por estado.
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Mascotas
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Pet' }
+  /pets/{petId}/adopt:
+    post:
+      tags: [pets]
+      summary: Adopta la mascota.
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                customer_id: { type: integer }
+      responses:
+        '200':
+          description: Adoptada
+  /orders:
+    get:
+      tags: [orders]
+      summary: Lista los pedidos.
+      parameters:
+        - name: offset
+          in: query
+          schema: { type: integer }
+        - name: limit
+          in: query
+          schema: { type: integer }
+        - name: customer_id
+          in: query
+          schema: { type: integer }
+        - name: created_after
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Página de pedidos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Order'
+                  page: { type: integer }
+                  total_pages: { type: integer }
+                  total: { type: integer }
+    post:
+      tags: [orders]
+      summary: Hace un pedido.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Order'
+      responses:
+        '201':
+          description: Creado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+  /orders/{orderId}:
+    get:
+      tags: [orders]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: El pedido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+    patch:
+      tags: [orders]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json-patch+json:
+            schema:
+              type: array
+              items: { type: object }
+      responses:
+        '200':
+          description: Actualizado
+  /orders/{orderId}/cancel:
+    post:
+      tags: [orders]
+      summary: Cancela el pedido si aún no ha salido.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Cancelado
+  /customers:
+    get:
+      summary: Lista los clientes.
+      responses:
+        '200':
+          description: Clientes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Customer'
+  /users/login:
+    get:
+      summary: Inicia sesión.
+      parameters:
+        - name: username
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Token
+  /health:
+    get:
+      responses:
+        '200':
+          description: Funciona
+components:
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      properties:
+        code: { type: integer }
+        message: { type: string }
+    NewPet:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        status:
+          type: string
+          enum: [available, pending, sold]
+        price: { type: number }
+        tags:
+          type: array
+          items: { type: string }
+    Pet:
+      allOf:
+        - $ref: '#/components/schemas/NewPet'
+        - type: object
+          required: [id]
+          properties:
+            id: { type: integer, format: int64 }
+            createdAt: { type: string, format: date-time }
+            owner_id: { type: integer, nullable: true }
+    Order:
+      type: object
+      properties:
+        id: { type: string }
+        customer_id: { type: integer }
+        pet_ids:
+          type: array
+          items: { type: integer }
+        total_amount: { type: number }
+        created_at: { type: integer, description: Segundos desde 1970 }
+        status: { type: string, enum: [placed, shipped, cancelled] }
+    Customer:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        _internal: { type: boolean }
