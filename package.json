@@ -7,6 +7,13 @@
     "restep-from-openapi": "restep-from-openapi.mjs"
   },
   "license": "MIT",
+  "files": [
+    "restep-from-openapi.mjs",
+    "yaml.mjs",
+    "json-schema.mjs",
+    "schema/",
+    "README.md"
+  ],
   "engines": {
     "node": ">=18"
   },
