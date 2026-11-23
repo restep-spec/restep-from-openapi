@@ -121,6 +121,26 @@ const validates = (name, disc) => {
   ok(!e1.length && !e2.length, `${name}: el borrador valida contra discovery.json (con y sin anotaciones)`, [...e1, ...e2].slice(0, 3).map((e) => `${e.at} ${e.message}`).join('; '));
 };
 
+// §4.3 y apéndice A: un formulario sale de create; title, default y examples pasan tal cual, las
+// etiquetas de un enum (x-enumNames) pasan a oneOf con title, y update se queda sin default.
+{
+  const book = { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string', title: 'Título', example: 'La niebla' },
+    status: { type: 'string', enum: ['draft', 'published'], 'x-enumNames': ['Borrador', 'Publicado'], default: 'draft', nullable: true } } };
+  const r = analyze({ openapi: '3.0.3', info: { title: 'x', version: '1' }, servers: [{ url: 'https://f.example/' }], paths: {
+    '/books': { get: { responses: { 200: { description: 'ok', content: { 'application/json': { schema: { type: 'array', items: book } } } } } },
+      post: { requestBody: { content: { 'application/json': { schema: book } } }, responses: { 201: { description: 'ok', content: { 'application/json': { schema: book } } } } } },
+    '/books/{id}': { parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+      get: { responses: { 200: { description: 'ok', content: { 'application/json': { schema: book } } } } },
+      put: { requestBody: { content: { 'application/json': { schema: book } } }, responses: { 200: { description: 'ok', content: { 'application/json': { schema: book } } } } } },
+  } });
+  const s = r.discovery.collections.books?.schemas ?? {};
+  const st = s.create?.properties?.status;
+  ok(st?.default === 'draft' && JSON.stringify(st.oneOf) === JSON.stringify([{ const: 'draft', title: 'Borrador' }, { const: 'published', title: 'Publicado' }, { type: 'null' }]) && !('enum' in st),
+    'formularios: default y etiquetas del enum en create', JSON.stringify(st));
+  ok(s.create?.properties?.title?.title === 'Título' && s.create.properties.title.examples?.[0] === 'La niebla', 'formularios: title y example pasan a create', JSON.stringify(s.create?.properties?.title));
+  ok(s.update && !('default' in (s.update.properties?.status ?? {})), 'formularios: update sin default', JSON.stringify(s.update?.properties?.status));
+}
+
 const pet = analyze(load('petstore-ampliada.yaml'));
 {
   const has = ids(pet);
@@ -132,8 +152,13 @@ const pet = analyze(load('petstore-ampliada.yaml'));
   ok(!missing.length, 'Petstore: detecta los fallos esperados', `faltan ${missing.join(', ')}`);
   ok(pet.api.root === 'https://petstore.example.com/api/v1/' && pet.discovery.version === '1', 'Petstore: raíz y versión mayor');
   const where = finding(pet, 'query.filter.name').where.join(' ');
-  ok(/min_price → filter\[price\]\[ge\]/.test(where) && /created_after → filter\[created_at\]\[gt\]/.test(where) && /tags → filter\[tags\]\[in\]/.test(where),
+  // tags es una lista en Pet: desde el borrador 6 no se declara en filter (§6.1), sino como filtro con nombre.
+  ok(/min_price → filter\[price\]\[ge\]/.test(where) && /created_after → filter\[created_at\]\[gt\]/.test(where) && /tags → filter\[tags\]( |$)/.test(where),
     'Petstore: traduce los filtros a filter[campo][op]', where);
+  const pf = pet.discovery.collections.pets;
+  ok(!pf.filter.tags && pf.named_filters?.tags?.type === 'string' && /lista/.test(pf.named_filters.tags.description) && finding(pet, 'query.filter.list'),
+    'Petstore: el filtro sobre una lista pasa a named_filters con su descripción (§6.1)', JSON.stringify(pf.named_filters));
+  ok(pf.named_filters?.q?.type === 'string' && /filter\[q\]/.test(finding(pet, 'query.search').where.join(' ')), 'Petstore: la búsqueda libre ?q pasa a un filtro con nombre', JSON.stringify(pf.named_filters));
   ok(finding(pet, 'core.put').section === '5.1' && finding(pet, 'core.error.media').section === '5.4' && finding(pet, 'query.pagination.offset').section === '6.4',
     'Petstore: cada hallazgo cita su apartado');
   ok(finding(pet, 'core.list.array').where.includes('GET /pets'), 'Petstore: cada hallazgo cita la operación de OpenAPI');
@@ -162,9 +187,11 @@ const casi = analyze(load('casi-restep.json'));
     'Casi Restep: relación expandible y subcolección');
   ok(books.actions.reserve?.on === 'item' && books.actions.reserve.input?.properties?.hours, 'Casi Restep: acción con dos puntos y su input');
   ok(books.schemas?.update?.additionalProperties === false && !('id' in (books.schemas.create.properties ?? {})), 'Casi Restep: esquemas create y update');
-  ok(casi.discovery.profiles.join() === 'core,query,writes,relations' && casi.discovery.extensions.join() === 'actions,oauth' && casi.discovery.idempotency?.ttl === 86400,
+  // Documenta Cache-Control y ETag en las lecturas: desde el borrador 6 eso es el perfil cache (§8), no writes.
+  ok(casi.discovery.profiles.join() === 'core,query,writes,cache,relations' && casi.discovery.extensions.join() === 'actions,oauth' && casi.discovery.idempotency?.ttl === 86400,
     'Casi Restep: perfiles y extensiones', JSON.stringify([casi.discovery.profiles, casi.discovery.extensions]));
-  ok(casi.discovery.collections.reviews?.path === '/books/{id}/reviews', 'Casi Restep: subcolección como colección con plantilla');
+  ok(casi.discovery.collections.reviews?.path === '/books/{id}/reviews' && casi.discovery.collections.reviews.parent === 'books', 'Casi Restep: subcolección como colección con plantilla y parent (§4.2)');
+  ok(casi.discovery.restep === '1.0-draft.6', 'Casi Restep: el borrador declara 1.0-draft.6 (§1.1)');
   validates('Casi Restep', casi.discovery);
 }
 
@@ -183,6 +210,57 @@ const crm = analyze(load('legado-crm.yaml'));
   ok(typeof crm.scores.sync.score === 'number', 'CRM heredado: sync se puntúa porque hay indicios');
   ok(/Referencia circular/.test(JSON.stringify(crm.discovery.collections.accounts.schemas.item)), 'CRM heredado: corta el esquema recursivo');
   validates('CRM heredado', crm.discovery);
+}
+
+// Borrador 6: singletons, id_from, subcolecciones anidadas, filtros prohibidos, Content-Type, cache y deprecated.
+{
+  const ok200 = (schema, headers) => ({ 200: { description: 'ok', ...(headers ? { headers } : {}), content: { 'application/json': { schema } } } });
+  const err = { 404: { description: 'no', content: { 'application/problem+json': { schema: { type: 'object', properties: { code: { type: 'string' } } } } } } };
+  const author = { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, active: { type: 'boolean' }, labels: { type: 'array', items: { type: 'string' } } } };
+  const list = (item) => ({ type: 'object', properties: { items: { type: 'array', items: item }, next: { type: ['string', 'null'] } } });
+  const idp = (n) => ({ name: n, in: 'path', required: true, schema: { type: 'string' } });
+  const doc = { openapi: '3.1.0', info: { title: 'Borrador 6', version: '1' }, servers: [{ url: 'https://b6.example/' }], paths: {
+    '/authors': {
+      get: { parameters: [{ name: 'filter[id][gt]', in: 'query', schema: { type: 'string' } }, { name: 'filter[id]', in: 'query', schema: { type: 'string' } },
+        { name: 'filter[active][lt]', in: 'query', schema: { type: 'boolean' } }, { name: 'filter[active]', in: 'query', schema: { type: 'boolean' } },
+        { name: 'filter[books.title]', in: 'query', schema: { type: 'string' } }, { name: 'limit', in: 'query', schema: { type: 'integer' } },
+        { name: 'legacy', in: 'query', deprecated: true, schema: { type: 'string' } }],
+        responses: { ...ok200(list(author), { 'Cache-Control': { schema: { type: 'string' } } }), ...err } },
+      post: { requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['id', 'name'], properties: { id: { type: 'string' }, name: { type: 'string' } } } } } },
+        responses: { 201: { description: 'ok', headers: { Location: { schema: { type: 'string' } } }, content: { 'application/json': { schema: author } } }, ...err } } },
+    '/authors/{id}': { parameters: [idp('id')], get: { responses: { ...ok200(author, { ETag: { schema: { type: 'string' } }, 'Cache-Control': { schema: { type: 'string' } } }), ...err } } },
+    '/authors/{id}/books': { parameters: [idp('id')], get: { responses: { ...ok200(list({ type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' } } }), { 'Cache-Control': { schema: { type: 'string' } } }), ...err } } },
+    '/authors/{id}/books/{id2}': { parameters: [idp('id'), idp('id2')], get: { responses: { ...ok200({ type: 'object', properties: { id: { type: 'string' } } }, { ETag: { schema: { type: 'string' } }, 'Cache-Control': { schema: { type: 'string' } } }), ...err } } },
+    '/authors/{id}/books/{id}/reviews': { parameters: [idp('id')], get: { responses: { ...ok200(list({ type: 'object', properties: { id: { type: 'string' } } })), ...err } } },
+    '/uploads': { post: { requestBody: { content: { 'multipart/form-data': { schema: { type: 'object' } } } }, responses: { 201: { description: 'ok', headers: { Location: { schema: { type: 'string' } } } }, ...err } } },
+    '/me': { get: { summary: 'The signed-in user.', responses: { ...ok200({ type: 'object', properties: { name: { type: 'string' } } }), ...err } },
+      patch: { requestBody: { content: { 'application/merge-patch+json': { schema: { type: 'object', properties: { name: { type: 'string' } } } } } }, responses: { ...ok200({ type: 'object' }), ...err } } },
+    '/authors/stats': { get: { responses: { ...ok200({ type: 'object', properties: { total: { type: 'integer' } } }), ...err } } },
+    '/old': { get: { deprecated: true, responses: { ...ok200({ type: 'object' }), ...err } }, delete: { responses: { 204: { description: 'ok' } } } },
+  } };
+  const r = analyze(doc);
+  const d = r.discovery;
+  validates('Borrador 6', d);
+  ok(d.restep === '1.0-draft.6', 'Borrador 6: declara 1.0-draft.6');
+  ok(d.singletons?.me?.path === '/me' && d.singletons.me.methods.join() === 'GET,PATCH' && d.singletons.me.description === 'The signed-in user.' && d.singletons.me.schemas?.update,
+    'Borrador 6: /me es un singleton con GET y PATCH (§5.9)', JSON.stringify(d.singletons));
+  ok(!d.singletons?.stats && !d.singletons?.old && finding(r, 'core.non-resource')?.where.some((w) => /\/authors\/stats/.test(w))
+    && finding(r, 'core.non-resource').where.some((w) => /DELETE \/old/.test(w)),
+    'Borrador 6: no son singleton una ruta bajo una colección ni un recurso con DELETE', JSON.stringify(finding(r, 'core.non-resource')?.where));
+  const a = d.collections.authors;
+  ok(a.id_from === 'client' && a.schemas.create.properties.id && finding(r, 'core.post.id')?.severity === 'info', 'Borrador 6: un id obligatorio en create da id_from client y se queda en el esquema (§5.1)', JSON.stringify(a.id_from));
+  ok(a.filter.id.ops.join() === 'eq' && a.filter.active.ops.join() === 'eq', 'Borrador 6: id sin operadores de orden y boolean sin lt (§6.1)', JSON.stringify(a.filter));
+  ok(!a.filter['books.title'], 'Borrador 6: no declara un filtro que atraviesa una relación a muchos (§6.1)', JSON.stringify(Object.keys(a.filter)));
+  ok(!a.filter.labels && finding(r, 'query.limit.max')?.severity === 'warning', 'Borrador 6: limit sin máximo es un aviso (§6.4)');
+  const books = Object.entries(d.collections).find(([, c]) => c.path === '/authors/{id}/books');
+  const reviews = Object.entries(d.collections).find(([, c]) => /reviews$/.test(c.path));
+  ok(books && books[1].parent === 'authors' && reviews && reviews[1].path === '/authors/{id}/books/{book_id}/reviews' && reviews[1].parent === books[0],
+    'Borrador 6: subcolecciones con parent y variables distintas (§4.2)', JSON.stringify(reviews));
+  ok(finding(r, 'core.request.media')?.where.some((w) => /POST \/uploads \(multipart/.test(w)), 'Borrador 6: un POST con multipart da un error de Content-Type (§3)');
+  ok(d.profiles.includes('cache') === false && r.scores.cache.score === 100, 'Borrador 6: sin Cache-Control en todas las lecturas no anuncia cache, pero lo puntúa', JSON.stringify(d.profiles));
+  ok(finding(r, 'core.deprecated')?.where.some((w) => /\?legacy/.test(w)) && finding(r, 'core.deprecated').where.some((w) => /GET \/old/.test(w)) && !d.deprecations,
+    'Borrador 6: lo deprecated se anota sin inventar announced (§5.5)');
+  ok(Object.values(d.collections).every((c) => !c.filter || Object.keys(c.filter).every((k) => /^[A-Za-z][A-Za-z0-9_-]{0,63}(\.[A-Za-z][A-Za-z0-9_-]{0,63})*$/.test(k))), 'Borrador 6: los nombres siguen la gramática (§3)');
 }
 
 // La puntuación ordena las API de más lejos a más cerca de Restep.
@@ -220,7 +298,7 @@ ok(casi.scores.core.score > pet.scores.core.score || casi.scores.query.score > p
     const a = await run([FIX('casi-restep.json'), '--out', out, '--report', rep]);
     ok(a.code === 0 && existsSync(out) && existsSync(rep) && /core\s+100/.test(a.out), 'CLI: --out y --report', a.err || a.out);
     const disc = JSON.parse(readFileSync(out, 'utf8'));
-    ok(validate(SCHEMA, disc).length === 0 && disc.restep === '1.0', 'CLI: el archivo de --out valida');
+    ok(validate(SCHEMA, disc).length === 0 && disc.restep === '1.0-draft.6', 'CLI: el archivo de --out valida', JSON.stringify(validate(SCHEMA, disc).slice(0, 3)));
     ok(/^# Librería casi Restep/.test(readFileSync(rep, 'utf8')), 'CLI: el informe es Markdown');
     const b = await run([`http://127.0.0.1:${HTTP_PORT}/openapi.yaml`, '--json', '--no-annotations', '--no-schemas']);
     let j = null;

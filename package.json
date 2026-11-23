@@ -1,6 +1,6 @@
 {
   "name": "restep-from-openapi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Dice qué le falta a una API descrita en OpenAPI para cumplir Restep 1 y escribe un borrador de su descubrimiento",
   "type": "module",
   "bin": {

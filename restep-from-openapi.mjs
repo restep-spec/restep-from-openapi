@@ -16,19 +16,22 @@ import { validate } from './json-schema.mjs';
 
 export { parseYaml, validate };
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const SPEC = 'https://restep.wubytes.com/es/1/';
 const SCHEMA_URL = 'https://restep.wubytes.com/1/schema/discovery.json';
 const HTTP_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace', 'query'];
-const PROFILES = ['core', 'query', 'writes', 'relations', 'sync'];
+const PROFILES = ['core', 'query', 'writes', 'cache', 'relations', 'sync'];
+// Versión de Restep que declara el borrador: el texto que sigue esta herramienta (§1.1).
+export const RESTEP_VERSION = '1.0-draft.6';
 
 // Apartado de la spec → ancla de la página en español.
 const ANCHORS = {
-  '1.2': 'dependencias', '3': 'datos', '6': 'query', '7': 'writes', '10': 'extensiones', '4.1': 'cabecera-perfil', '4.2': 'descubrimiento', '4.3': 'describir', '4.4': 'salud',
-  '5.1': 'recursos', '5.2': 'colecciones', '5.3': 'reservados', '5.4': 'errores', '5.5': 'versiones', '5.6': 'idioma',
-  '6.1': 'filtros', '6.2': 'orden', '6.3': 'campos', '6.4': 'paginacion', '6.5': 'recuento',
-  '7.1': 'idempotencia', '7.2': 'concurrencia', '7.3': 'cache', '7.4': 'respuesta-minima',
-  '8': 'relations', '9': 'sync', '10.1': 'actions', '10.2': 'batch', '10.3': 'filter-expr', '10.4': 'query-method', '10.5': 'oauth',
+  '1.1': 'versiones-restep', '1.2': 'dependencias', '3': 'datos', '4.1': 'cabecera-perfil', '4.2': 'descubrimiento', '4.3': 'describir', '4.4': 'salud',
+  '5.1': 'recursos', '5.2': 'colecciones', '5.3': 'reservados', '5.4': 'errores', '5.5': 'versiones', '5.6': 'idioma', '5.7': 'reintentos',
+  '5.8': 'navegadores', '5.9': 'singletons',
+  '6': 'query', '6.1': 'filtros', '6.2': 'orden', '6.3': 'campos', '6.4': 'paginacion', '6.5': 'recuento',
+  '7': 'writes', '7.1': 'idempotencia', '7.2': 'concurrencia', '7.3': 'respuesta-minima', '8': 'cache', '9': 'relations', '10': 'sync',
+  '11': 'extensiones', '11.1': 'actions', '11.2': 'batch', '11.3': 'filter-expr', '11.4': 'query-method', '11.5': 'oauth', '11.6': 'herencia',
 };
 export const sectionLink = (s) => `[§${s}](${SPEC}#${ANCHORS[s] ?? ''})`;
 
@@ -81,6 +84,21 @@ const firstSentence = (s) => {
   const out = m ? m[1] : t;
   return out.length > 240 ? out.slice(0, 237) + '…' : out;
 };
+// Gramática de nombres (§3) y de rutas con punto; plantillas con variables simples y distintas (§4.2).
+const NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const FIELD_PATH_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}(\.[A-Za-z][A-Za-z0-9_-]{0,63})*$/;
+function templatePath(path) {
+  const used = new Set();
+  let prev = 'item';
+  return path.split('/').map((seg) => {
+    if (!isParam(seg)) { if (seg) prev = seg; return seg; }
+    let v = seg.slice(1, -1).replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'id';
+    if (used.has(v)) v = `${snake(singular(prev)) || 'item'}_id`;
+    for (let i = 2, b = v; used.has(v); i++) v = `${b}_${i}`;
+    used.add(v);
+    return `{${v}}`;
+  }).join('/');
+}
 const isJsonMedia = (m) => /^application\/(.+\+)?json\b/i.test(m) || m === '*/*';
 
 const VERBS = new Set(['activate', 'add', 'adopt', 'apply', 'approve', 'archive', 'assign', 'authorize', 'block', 'book', 'calculate',
@@ -386,12 +404,12 @@ class Context {
   checkSecurity() {
     const schemes = Object.entries(this.doc.components?.securitySchemes ?? {}).map(([k, v]) => [k, this.resolve(v)]);
     this.oauth = schemes.some(([, s]) => s?.type === 'oauth2' || s?.type === 'openIdConnect');
-    if (this.oauth) this.add('extensions', 'oauth.metadata', 'info', '10.5', schemes.filter(([, s]) => s?.type === 'oauth2' || s?.type === 'openIdConnect').map(([k]) => `securitySchemes.${k}`),
+    if (this.oauth) this.add('extensions', 'oauth.metadata', 'info', '11.5', schemes.filter(([, s]) => s?.type === 'oauth2' || s?.type === 'openIdConnect').map(([k]) => `securitySchemes.${k}`),
       'Usa OAuth 2.0: puede anunciar la extensión oauth.',
       'Sirve los metadatos de recurso protegido (RFC 9728) en /.well-known/oauth-protected-resource/<raíz> y pon resource_metadata en el reto de los 401 de la raíz.');
     for (const [k, s] of schemes)
       if (s?.type === 'apiKey' && s.in === 'query')
-        this.add('extensions', 'oauth.query-token', 'warning', '10.5', `securitySchemes.${k} (?${s.name})`,
+        this.add('extensions', 'oauth.query-token', 'warning', '11.5', `securitySchemes.${k} (?${s.name})`,
           'Las credenciales van en la query.', 'Mándalas en Authorization: una URL con el token acaba en registros y cachés (RFC 6750, 2.3).');
   }
 
@@ -440,9 +458,13 @@ class Context {
           this.add('core', 'core.error.in-200', 'warning', '5.4', where,
             'La respuesta 200 lleva un indicador de éxito o error.', 'Un error nunca va en un 200: usa el estado HTTP y problem+json. Quita success/ok/error de los 200.');
       }
+      if (op.deprecated === true) this.add('core', 'core.deprecated', 'info', '5.5', where, 'Algo está marcado como deprecated.',
+            'Restep lo anuncia en deprecations del descubrimiento (§5.5), con su kind (field, filter, method, collection…), announced (el instante en que se publicó el aviso, que no cambia) y sunset cuando haya fecha; las respuestas que lo usan llevan Deprecation y Link rel="deprecation". El borrador no lo declara: OpenAPI no dice cuándo se anunció.');
       // Credenciales en la query, idempotencia, condicionales
       for (const p of o.params) {
         const n = lc(p.name ?? '');
+        if (p.deprecated === true) this.add('core', 'core.deprecated', 'info', '5.5', `${where}?${p.name}`, 'Algo está marcado como deprecated.',
+            'Restep lo anuncia en deprecations del descubrimiento (§5.5), con su kind (field, filter, method, collection…), announced (el instante en que se publicó el aviso, que no cambia) y sunset cuando haya fecha; las respuestas que lo usan llevan Deprecation y Link rel="deprecation". El borrador no lo declara: OpenAPI no dice cuándo se anunció.');
         if (p.in === 'header' && n === 'idempotency-key') this.pass('writes', '7.1', 'Los POST aceptan Idempotency-Key.', ['writes.idempotency', 'writes.idempotency-name']);
         if (p.in === 'query' && n.startsWith('$')) this.add('core', 'core.reserved.dollar', 'error', '5.3', `${where}?${p.name}`,
           'Usa parámetros que empiezan por «$» (estilo OData).', 'Los nombres con $ son de Restep. Pasa a filter[…], sort, fields y limit (6), o a nombres propios sin $.');
@@ -453,19 +475,48 @@ class Context {
     if (problem) this.pass('core', '5.4', 'Los errores van en application/problem+json.', ['core.error.media']);
     this.anyErrors = anyErrors;
     // Rutas que no son colecciones ni elementos
+    const loose = new Map();
     for (const x of this.others) {
       if (x.root) continue;
       if (x.rpc && x.o.method === 'GET' && /^(find|search|list|get|fetch)/i.test(x.o.path.split('/').at(-1)) && x.o.path.split('/').filter(Boolean).length > 1)
         this.add('query', 'query.search-path', 'warning', '6.1', x.o.where, 'Una búsqueda tiene su propia ruta.',
           'Filtra sobre la propia colección: GET /pets?filter[status]=sold en vez de GET /pets/findByStatus?status=sold, con los filtros declarados en el descubrimiento.');
       else if (x.rpc) this.add('core', 'core.rpc-path', 'warning', '5.1', x.o.where,
-        'La ruta es un nombre de procedimiento (estilo RPC).', 'Organiza la API en colecciones y elementos (/users, /users/7) con GET, POST, PATCH y DELETE; lo demás, como acciones (10.1).');
-      else if (x.action) this.add('extensions', 'actions.verb-path', 'warning', '10.1', x.o.where,
+        'La ruta es un nombre de procedimiento (estilo RPC).', 'Organiza la API en colecciones y elementos (/users, /users/7) con GET, POST, PATCH y DELETE; lo demás, como acciones (11.1).');
+      else if (x.action) this.add('extensions', 'actions.verb-path', 'warning', '11.1', x.o.where,
         'Un verbo en la URL hace de acción.', `Decláralo como acción: ${x.o.method === 'GET' ? 'GET' : 'POST'} ${this.prefix}${x.action.base}:${snake(x.action.name)}.`);
       else if (/^\/?(health|healthz|status|ping|livez|readyz)$/i.test(x.o.path.replace(/^\//, ''))) this.statusPath = x.o.rawPath;
-      else this.add('core', 'core.non-resource', 'info', '5.1', x.o.where,
-        'Recurso que no es colección ni elemento.', 'Restep solo describe colecciones y sus elementos; un recurso suelto puede quedarse, pero no entra en el descubrimiento. Si es un único objeto (/me, /settings), valora una colección o una acción.');
+      else { if (!loose.has(x.o.path)) loose.set(x.o.path, []); loose.get(x.o.path).push(x.o); }
     }
+    this.findSingletons(loose);
+  }
+
+  // §5.9 (borrador 6): un recurso suelto que es un único objeto (/me, /settings) se declara como
+  // singleton si su ruta no es una plantilla ni una que una colección o un elemento tenga o pueda
+  // tener, admite GET y, como mucho, PATCH (un PUT pasa a PATCH). Los demás quedan fuera de Restep.
+  findSingletons(loose) {
+    this.singletons = [];
+    for (const [path, ops] of loose) {
+      const methods = new Set(ops.map((o) => o.method));
+      const get = ops.find((o) => o.method === 'GET');
+      const ok = get && [...methods].every((m) => ['GET', 'HEAD', 'PATCH', 'PUT'].includes(m)) && !path.split('/').some(isParam)
+        && !this.collections.some((c) => path.startsWith(c.path + '/') || path === c.path);
+      const shape = get && this.successSchema(get.op);
+      const objectLike = !shape?.schema || this.listShape(shape.schema).kind === 'object';
+      if (!ok || !objectLike) {
+        for (const o of ops) this.add('core', 'core.non-resource', 'info', '5.9', o.where, 'Recurso que no es colección, elemento ni singleton.',
+          'Queda fuera de Restep (§5.9): solo le aplican 5.3, 5.4 y la regla de Cache-Control de 5.1, y no entra en el descubrimiento. Si es un único objeto con GET y PATCH, '
+          + 'como /me o /settings, puede declararse como singleton; si crea o borra cosas, valora una colección o una acción.');
+        continue;
+      }
+      const segs = path.split('/').filter(Boolean);
+      let name = snake(segs.at(-1)) || 'recurso';
+      if (this.singletons.some((x) => x.name === name)) name = snake(segs.join('_')) || name;
+      this.singletons.push({ name, path, ops: Object.fromEntries(ops.map((o) => [o.method, o])) });
+      this.add('core', 'core.singleton', 'info', '5.9', ops.map((o) => o.where), 'Recurso suelto que el borrador declara como singleton.',
+        'Un singleton admite GET (y HEAD) y, si acaso, PATCH con merge patch; POST y DELETE le dan 405. Sus relaciones llevan href, y include y los demás parámetros reservados que no implementa dan unsupported_parameter (§5.9).');
+    }
+    if (this.singletons.length) this.pass('core', '5.9', 'Los recursos de un solo objeto se pueden declarar como singletons.');
   }
 
   checkCollections() {
@@ -512,9 +563,17 @@ class Context {
         const body = this.resolve(post.op.requestBody)?.content;
         const bm = body && Object.keys(body).find(isJsonMedia);
         const bodyProps = bm ? this.props(body[bm].schema) : {};
-        if ('id' in bodyProps && !this.resolve(bodyProps.id)?.readOnly)
-          this.add('core', 'core.post.id', 'warning', '5.1', `${post.where} (${this.refName(body[bm].schema) ? `esquema ${this.refName(body[bm].schema)}` : 'cuerpo'})`,
-            'El cuerpo de creación admite id.', 'El servidor asigna el id y responde 422 invalid a un POST que lo trae: quítalo del esquema del cuerpo o márcalo readOnly.');
+        // §5.1 (borrador 6): el cliente puede elegir el id si la colección lo declara en id_from.
+        if ('id' in bodyProps && !this.resolve(bodyProps.id)?.readOnly) {
+          c.idFrom = this.requiredOf(body[bm].schema).includes('id') ? 'client' : 'either';
+          this.add('core', 'core.post.id', 'info', '5.1', `${post.where} (${this.refName(body[bm].schema) ? `esquema ${this.refName(body[bm].schema)}` : 'cuerpo'} → id_from ${c.idFrom})`,
+            'El cuerpo de creación admite id: el cliente elige el id.',
+            'El borrador lo declara con id_from ("client" si el id es obligatorio, "either" si no). Entonces el servidor valida el id (422 con type o format), '
+            + 'responde 409 con una entrada taken a un id que la colección tiene o ha tenido, y conviene exigir un formato difícil de adivinar, como un UUID (§13.6). '
+            + 'Si en realidad lo asigna el servidor, quítalo del cuerpo o márcalo readOnly: un POST con id da 422 con read_only.');
+        }
+        // §3: el cuerpo de un POST a una colección va en application/json; otro tipo da 415.
+        this.checkJsonBody(post);
         const h = post.params.find((p) => p.in === 'header' && /idempoten/i.test(p.name));
         if (!h) this.add('writes', 'writes.idempotency', 'warning', '7.1', post.where, 'Los POST no aceptan Idempotency-Key.',
           'Acepta Idempotency-Key (una cadena de Structured Fields) y devuelve la misma respuesta al repetir la petición.');
@@ -530,13 +589,10 @@ class Context {
         if (h.etag) this.pass('writes', '7.2', 'El GET de un elemento declara ETag.', ['writes.etag']);
         else if (writes) this.add('writes', 'writes.etag', 'error', '7.2', iget.where, 'El GET del elemento no declara ETag.',
           'Devuelve una ETag fuerte de la representación completa; es lo que permite If-Match.');
-        if (!h['cache-control']) this.add('writes', 'writes.cache-control', 'info', '7.3', iget.where, 'No se documenta Cache-Control en las lecturas.',
-          'Toda respuesta a GET o HEAD lleva Cache-Control explícito (private o no-store si depende de las credenciales).');
-        else this.pass('writes', '7.3', 'Las lecturas documentan Cache-Control.', ['writes.cache-control']);
+        this.checkCacheControl(h, iget.where);
+        if (!h.etag) this.cacheMissing = true;
       }
-      if (get && !this.headersOf(this.successSchema(get.op)?.response)['cache-control'])
-        this.add('writes', 'writes.cache-control', 'info', '7.3', get.where, 'No se documenta Cache-Control en las lecturas.',
-          'Toda respuesta a GET o HEAD lleva Cache-Control explícito (private o no-store si depende de las credenciales).');
+      if (get) this.checkCacheControl(this.headersOf(this.successSchema(get.op)?.response), get.where);
       for (const m of ['PATCH', 'PUT', 'DELETE']) {
         const o = c.itemOps[m];
         if (!o) continue;
@@ -564,20 +620,51 @@ class Context {
       this.checkQueryParams(c);
       // Acciones
       for (const a of c.actions) {
-        if (a.style === 'colon') this.pass('extensions', '10.1', 'Las acciones usan la forma con dos puntos (/orders/{id}:cancel).');
-        else this.add('extensions', 'actions.verb-path', 'warning', '10.1', a.o.where,
+        if (a.style === 'colon') this.pass('extensions', '11.1', 'Las acciones usan la forma con dos puntos (/orders/{id}:cancel).');
+        else this.add('extensions', 'actions.verb-path', 'warning', '11.1', a.o.where,
           'Un verbo en la URL hace de acción.', 'Decláralo como acción con dos puntos: POST /orders/{id}:cancel en vez de POST /orders/{id}/cancel.');
-        if (lc(a.name) === 'search' && a.o.method === 'POST') this.add('extensions', 'query-method.search', 'info', '10.4', a.o.where,
+        if (a.o.method === 'POST') this.checkJsonBody(a.o);
+        if (lc(a.name) === 'search' && a.o.method === 'POST') this.add('extensions', 'query-method.search', 'info', '11.4', a.o.where,
           'Una búsqueda por POST.', 'Si es para consultas que no caben en la URL, Restep tiene QUERY (extensión query-method) con los mismos filtros que GET; si no, usa GET con filter[…].');
       }
-      if (c.ops.QUERY) this.pass('extensions', '10.4', 'Usa el método QUERY.');
+      if (c.ops.QUERY) this.pass('extensions', '11.4', 'Usa el método QUERY.');
     }
     // Lotes
     for (const o of this.ops) if (/\/(batch|bulk)(\/|$|:)/i.test(o.path) || /:(batch|bulk)\w*$/i.test(o.path))
-      this.add('extensions', 'batch.bulk', 'info', '10.2', o.where, 'Hay operaciones por lotes.',
+      this.add('extensions', 'batch.bulk', 'info', '11.2', o.where, 'Hay operaciones por lotes.',
         'Restep tiene la extensión batch: un único POST con operaciones en orden, referencias entre ellas y modo atómico.');
     if (!this.collections.length) this.add('core', 'core.no-collections', 'error', '5.2', 'todo el documento',
       'No se reconoce ninguna colección.', 'Restep organiza la API en colecciones (/books) y elementos (/books/7).');
+  }
+
+  // Los required de un esquema de objeto, juntando allOf.
+  requiredOf(schema, depth = 0) {
+    const s = this.resolve(schema);
+    if (!isObject(s) || depth > 8) return [];
+    return [...(Array.isArray(s.required) ? s.required : []), ...(s.allOf ?? []).flatMap((x) => this.requiredOf(x, depth + 1))];
+  }
+
+  // §3 (borrador 6): una petición con cuerpo a un recurso de Restep (POST a una colección o a una
+  // acción) lleva Content-Type: application/json; cualquier otro tipo, o ninguno, da 415.
+  checkJsonBody(o) {
+    const body = this.resolve(o.op.requestBody);
+    const medias = Object.keys(body?.content ?? {});
+    if (!medias.length || medias.some((m) => lc(m).split(';')[0].trim() === 'application/json')) return;
+    this.add('core', 'core.request.media', 'error', '3', `${o.where} (${medias.join(', ')})`, 'El cuerpo de la petición no es application/json.',
+      'Un POST a una colección o a una acción lleva Content-Type: application/json, y el servidor responde 415 unsupported_media_type a cualquier otro tipo (también formularios y multipart) o a un cuerpo sin él. '
+      + 'Un archivo binario es un recurso fuera de Restep (§5.9).');
+  }
+
+  // Perfil cache (§8): toda lectura lleva Cache-Control explícito, y el GET de un elemento, ETag.
+  // Desde el borrador 6 es un perfil aparte de writes. Que una respuesta que depende de las
+  // credenciales lleve private o no-store lo pide §5.1 a todo servidor, pero OpenAPI no deja ver
+  // el valor de la cabecera.
+  checkCacheControl(h, where) {
+    if (h['cache-control']) { this.cacheHint = true; this.pass('cache', '8', 'Las lecturas documentan Cache-Control.', ['cache.cache-control']); return; }
+    this.cacheMissing = true;
+    this.add('cache', 'cache.cache-control', 'info', '8', where, 'No se documenta Cache-Control en las lecturas.',
+      'Con el perfil cache, toda respuesta a GET o HEAD, también los errores, lleva Cache-Control explícito, y el GET de un elemento, ETag. '
+      + 'Anuncies cache o no, una respuesta que depende de las credenciales lleva private o no-store (§5.1).');
   }
 
   // Parámetros de consulta de la lista (§5.3, §6) y lo que se puede inferir para el descubrimiento.
@@ -594,7 +681,30 @@ class Context {
       const cands = [base, words(base), base.replace(/_([a-z])/g, (_, x) => x.toUpperCase())];
       return fieldNames.find((f) => cands.includes(f)) ?? fieldNames.find((f) => lc(f) === lc(base) || words(f) === words(base)) ?? null;
     };
+    c.namedFilters = {};
+    // §6.1 (borrador 6): un campo cuyo valor es una lista no se declara en filter (si significa «algún
+    // elemento» o «todos» queda para una versión menor). Un parámetro sobre él pasa a ser un filtro
+    // con nombre, cuya descripción dice qué devuelve; uno con punto que atraviesa la lista se descarta.
+    const listPath = (field) => this.typeOf(itemProps[field.split('.')[0]]) === 'array';
+    const addNamed = (field, schema, source, why) => {
+      const itemSchema = this.typeOf(schema) === 'array' ? this.resolve(schema).items : schema;
+      const listItems = this.resolve(itemProps[field])?.items;
+      const decl = this.filterType(listItems ?? itemSchema, '', { itemSchema: {} });
+      c.namedFilters[field] ??= { type: decl.type, ...(decl.values ? { values: decl.values } : {}), description: why, sources: [] };
+      c.namedFilters[field].sources.push(source);
+    };
     const addFilter = (field, op, schema, confidence, source) => {
+      if (listPath(field)) {
+        if (field.includes('.')) {
+          this.add('query', 'query.filter.list', 'warning', '6.1', `${source} → ${field}`, 'Un filtro atraviesa un campo que es una lista.',
+            'Restep 1 no declara en filter ni en sort un campo que es una lista ni una ruta que pase por una relación a muchos (§6.1). Para ese criterio, declara un filtro con nombre (named_filters) con una descripción de qué elementos devuelve.');
+          return 'dropped';
+        }
+        addNamed(field, schema, source, `Elementos cuyo campo ${field}, una lista, contiene el valor (deducido de ${source.split('?').pop()}: revisa el criterio).`);
+        this.add('query', 'query.filter.list', 'warning', '6.1', `${source} → filter[${field}]`, 'Un filtro sobre un campo que es una lista.',
+          'Restep 1 no declara en filter un campo cuyo valor es una lista (§6.1). El borrador lo declara como filtro con nombre (named_filters), que se usa con filter[campo]=valor sin operadores y cuyo significado lo da su descripción.');
+        return 'named';
+      }
       const fname = field;
       const f = (c.filters[fname] ??= { ops: [], schema, confidence, sources: [] });
       if (!f.ops.includes(op)) f.ops.push(op);
@@ -622,11 +732,12 @@ class Context {
         case 'limit':
           if (t === 'integer' || t === 'number') { this.pass('query', '6.4', 'El tamaño de página se pide con limit.', ['query.limit.name']); c.maxLimit = schema.maximum; }
           else this.add('core', 'core.reserved.conflict', 'error', '5.3', where, 'Usa un parámetro reservado con otro significado.', RESERVED_FIX);
-          if (schema.maximum === undefined) this.add('query', 'query.limit.max', 'info', '6.4', where, 'limit no declara un máximo.', 'Declara el máximo (maximum en OpenAPI, max_limit en el descubrimiento); fuera de rango, invalid_parameter.');
+          if (schema.maximum === undefined) this.add('query', 'query.limit.max', 'warning', '6.4', where, 'limit no declara un máximo.',
+            'Una colección que acepta limit declara max_limit, y sin él limit da unsupported_parameter (§6.4). Declara el máximo (maximum en OpenAPI, max_limit en el descubrimiento); fuera de rango, invalid_parameter.');
           continue;
         case 'cursor': this.pass('query', '6.4', 'Pagina con cursor.', ['query.pagination.offset', 'query.pagination.cursor-param']); continue;
         case 'fields': this.pass('query', '6.3', 'Admite fields.'); c.fields = true; continue;
-        case 'include': c.includeValues = this.enumOf(schema) ?? []; this.pass('relations', '8', 'Las relaciones se expanden con include.', ['relations.expand']); continue;
+        case 'include': c.includeValues = this.enumOf(schema) ?? []; this.pass('relations', '9', 'Las relaciones se expanden con include.', ['relations.expand']); continue;
         case 'count':
           if (t === 'boolean') { c.count = true; this.pass('query', '6.5', 'Admite count=true.'); }
           else if (t === 'integer') this.add('query', 'query.limit.name', 'warning', '6.4', where, 'El tamaño de página no se llama limit.', 'Llámalo limit; count es reservado y en Restep pide el total (count=true, 6.5).');
@@ -653,7 +764,7 @@ class Context {
               else addFilter(field, 'eq', fs, 'high', where);
             }
             this.pass('query', '6.1', 'Los filtros usan filter[campo][op].', ['query.filter.name']);
-          } else this.add('extensions', 'filter-expr.string', 'warning', '10.3', where, 'filter es una expresión de texto.',
+          } else this.add('extensions', 'filter-expr.string', 'warning', '11.3', where, 'filter es una expresión de texto.',
             'Con filter=<expresión> Restep pide la extensión filter-expr (sintaxis de la AIP-160 con paréntesis obligatorios); declara además los campos en filter.');
           continue;
         case 'since':
@@ -687,7 +798,7 @@ class Context {
         continue;
       }
       if (/^(expand|embed|with|includes|populate|join)$/i.test(n)) {
-        this.add('relations', 'relations.expand', 'warning', '8', where, 'La expansión de relaciones no usa include.', 'Usa include=relacion (con rutas con punto hasta include_depth) y declara las relaciones expandibles.');
+        this.add('relations', 'relations.expand', 'warning', '9', where, 'La expansión de relaciones no usa include.', 'Usa include=relacion (con rutas con punto hasta include_depth) y declara las relaciones expandibles.');
         continue;
       }
       if (/^(include_?total|with_?count|total|count_?total|with_?total|totals|inlinecount)$/i.test(n)) {
@@ -696,20 +807,24 @@ class Context {
         continue;
       }
       if (/^(q|query|search|term|keyword|keywords|text|search_?term|fulltext)$/i.test(n)) {
-        this.add('query', 'query.search', 'info', '6.1', where, 'Búsqueda de texto libre.',
-          'Restep no define búsqueda de texto: el parámetro puede seguir como propio de la API (no es reservado). Lo que sea filtrar por un campo, mejor en filter[…].');
+        // §6.1: un criterio que no compara un campo es un filtro con nombre, con su descripción.
+        const nf = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name) ? name : 'search';
+        addNamed(nf, schema, where, firstSentence(p.description) ?? `Búsqueda de texto libre (deducida de ?${name}: describe qué campos mira y cómo compara).`);
+        this.add('query', 'query.search', 'info', '6.1', `${where} → filter[${nf}]`, 'Búsqueda de texto libre.',
+          'Restep la expresa como filtro con nombre (named_filters): filter[' + nf + ']=texto, declarado con type string y una descripción que diga qué elementos devuelve. '
+          + 'El parámetro propio puede seguir también, porque no es reservado.');
         continue;
       }
       if (/^(updated_?(since|after)|modified_?(since|after)|changed_?since|sync_?token|delta(_?token)?|last_?sync)$/i.test(n)) {
-        this.add('sync', 'sync.delta', 'warning', '9', where, 'La sincronización usa un parámetro propio.', 'Ofrece GET /coleccion:changes?since=<state> con created, updated y destroyed, y state en cada lista.');
+        this.add('sync', 'sync.delta', 'warning', '10', where, 'La sincronización usa un parámetro propio.', 'Ofrece GET /coleccion:changes?since=<state> con created, updated y destroyed, y state en cada lista.');
         this.syncHint = true;
         // También vale como filtro de fecha
       }
       // Lo demás: un filtro con nombre no reservado.
       const inferred = this.inferFilter(name, schema, matchField);
-      addFilter(inferred.field, inferred.op, inferred.schema ?? schema, inferred.confidence, where);
-      if (inferred.op2) addFilter(inferred.field, inferred.op2, inferred.schema ?? schema, inferred.confidence, where);
-      const target = inferred.op === 'eq' ? `filter[${inferred.field}]` : `filter[${inferred.field}][${inferred.op}]`;
+      const routed = addFilter(inferred.field, inferred.op, inferred.schema ?? schema, inferred.confidence, where);
+      if (inferred.op2 && !routed) addFilter(inferred.field, inferred.op2, inferred.schema ?? schema, inferred.confidence, where);
+      const target = routed === 'named' || inferred.op === 'eq' ? `filter[${inferred.field}]` : `filter[${inferred.field}][${inferred.op}]`;
       this.add('query', 'query.filter.name', 'warning', '6.1', `${where} → ${target}`, 'Los filtros usan nombres propios, no filter[campo][op].',
         'Pasa cada filtro a filter[campo] o filter[campo][op] y declara campo, tipo y operadores en filter: así un filtro que el servidor no conoce da 400 en vez de devolver la colección entera.');
     }
@@ -760,6 +875,8 @@ class Context {
         const t = this.typeOf(v);
         if (/[a-z][A-Z]/.test(k)) camel.push(`${at}.${k}`);
         else if (/^[a-z0-9]+(_[a-z0-9]+)+$/.test(k)) snakeNames.push(`${at}.${k}`);
+        if (v?.deprecated === true) this.add('core', 'core.deprecated', 'info', '5.5', `${at}.${k}`, 'Algo está marcado como deprecated.',
+            'Restep lo anuncia en deprecations del descubrimiento (§5.5), con su kind (field, filter, method, collection…), announced (el instante en que se publicó el aviso, que no cambia) y sunset cuando haya fecha; las respuestas que lo usan llevan Deprecation y Link rel="deprecation". El borrador no lo declara: OpenAPI no dice cuándo se anunció.');
         if (k.startsWith('_')) this.add('core', 'data.underscore', 'error', '3', `${at}.${k}`, 'Un campo empieza por «_».', 'Los miembros con _ son de Restep (_etag, _actions…): renombra el campo.');
         if (k !== 'id' && t === 'integer' && (v.format === 'int64' || v.format === 'uint64'))
           this.add('core', 'data.int64', 'warning', '3', `${at}.${k}`, 'Un entero de 64 bits va como número.', 'Si puede pasar de ±(2^53−1), envíalo como cadena en todas las representaciones.');
@@ -771,10 +888,10 @@ class Context {
           this.add('core', 'data.date-format', 'info', '3', `${at}.${k}`, 'Una fecha o un instante sin formato declarado.', 'Declara format: date-time (RFC 3339 con desfase) o format: date.');
         if (k !== 'id' && /^(.+?)(_id|Id|ID)$/.test(k) && (t === 'string' || t === 'integer'))
           this.add('relations', 'relations.scalar-fk', 'warning', '3', `${at}.${k}`, 'Una relación va como identificador suelto.',
-            'Una relación es un objeto con id: "owner": {"id": "4"}, para que el tipo no cambie al incluir el elemento (3, 8).');
+            'Una relación es un objeto con id: "owner": {"id": "4"}, para que el tipo no cambie al incluir el elemento (3, 9).');
         if (/^(.+?)(_ids|Ids|IDs)$/.test(k) && t === 'array')
           this.add('relations', 'relations.id-array', 'warning', '3', `${at}.${k}`, 'Una relación a muchos va como lista de identificadores.',
-            'Una relación a muchos es una lista de objetos con id, o mejor una subcolección si puede crecer sin límite (8).');
+            'Una relación a muchos es una lista de objetos con id, o mejor una subcolección si puede crecer sin límite (9).');
         if (t === 'object' && depth < 2 && !this.refName(v0)) visit(v, `${at}.${k}`, depth + 1);
       }
     };
@@ -805,21 +922,21 @@ class Context {
 
   checkSync() {
     for (const o of this.ops) {
-      if (/:changes$/.test(o.path)) { this.pass('sync', '9', 'Ofrece :changes.'); this.syncHint = true; this.syncNative = true; }
+      if (/:changes$/.test(o.path)) { this.pass('sync', '10', 'Ofrece :changes.'); this.syncHint = true; this.syncNative = true; }
       else if (/\/(changes|delta|sync)$/i.test(o.path)) {
-        this.add('sync', 'sync.endpoint', 'warning', '9', o.where, 'La sincronización tiene un endpoint propio.', 'Restep usa GET /coleccion:changes?since=<state> por colección, con state en cada lista.');
+        this.add('sync', 'sync.endpoint', 'warning', '10', o.where, 'La sincronización tiene un endpoint propio.', 'Restep usa GET /coleccion:changes?since=<state> por colección, con state en cada lista.');
         this.syncHint = true;
       }
       if (o.op.callbacks && Object.keys(o.op.callbacks).length) this.webhooks = true;
     }
     if (isObject(this.doc.webhooks) && Object.keys(this.doc.webhooks).length) this.webhooks = true;
     if (this.webhooks) {
-      this.add('sync', 'sync.webhooks', 'info', '9', 'webhooks/callbacks', 'Avisa de cambios con webhooks.',
+      this.add('sync', 'sync.webhooks', 'info', '10', 'webhooks/callbacks', 'Avisa de cambios con webhooks.',
         'Los webhooks pueden seguir; para mantener copias al día Restep usa :changes y, si quieres empujar avisos, un canal SSE declarado en events.');
       this.syncHint = true;
     }
-    if (this.syncHint && !this.syncNative) this.add('sync', 'sync.changes', 'error', '9', 'todas las colecciones', 'No hay :changes ni state.',
-      'Cada lista lleva state; GET /coleccion:changes?since=<state> devuelve created, updated y destroyed; y la colección declara filter[id] con in.');
+    if (this.syncHint && !this.syncNative) this.add('sync', 'sync.changes', 'error', '10', 'todas las colecciones', 'No hay :changes ni state.',
+      'La colección declara sync (y la API el perfil sync, experimental: §1.2); cada lista lleva state; GET /coleccion:changes?since=<state> devuelve created, updated y destroyed; y la colección declara filter[id] con in.');
   }
 
   // ── Borrador del descubrimiento ──────────────────────────────────────────
@@ -827,23 +944,37 @@ class Context {
   buildDiscovery() {
     const ann = this.options.annotations !== false;
     const withSchemas = this.options.schemas !== false;
-    const d = { restep: '1.0' };
+    // §1.1: un servidor que implementa un borrador lo declara con su sufijo.
+    const d = { restep: RESTEP_VERSION };
     if (this.majorVersion) d.version = this.majorVersion;
     const collections = {};
     const lowNotes = [];
-    const nameOf = new Map(this.collections.map((c) => [c, c.name]));
+    // Claves de las colecciones: nombres válidos (§3) y sin repetir; se calculan antes para que
+    // parent y relations puedan nombrar a cualquiera.
+    const nameOf = new Map();
+    for (const c of this.collections) {
+      const base = NAME_RE.test(c.name) ? c.name : (snake(c.name) || 'coleccion');
+      let key = base;
+      for (let i = 2; [...nameOf.values()].includes(key); i++) key = `${base}_${i}`;
+      nameOf.set(c, key);
+    }
+    for (const c of this.collections) c.declaredPath = templatePath(c.path);
     const bySchema = new Map();
     for (const c of this.collections) { const n = this.refName(c.itemSchema); if (n) bySchema.set(n, c); }
     let anyQuery = false, anyRelations = false, anyActions = false;
     for (const c of this.collections) {
       const notes = [];
-      const out = { path: c.path };
+      const out = { path: c.declaredPath };
+      if (c.declaredPath !== c.path) notes.push(`path: las variables de la plantilla se renombran para que sean distintas y simples (§4.2); en OpenAPI es ${c.path}`);
+      // §4.2: una subcolección nombra en parent la colección de cuyos elementos cuelga.
+      if (c.parent) out.parent = nameOf.get(c.parent);
       const desc = firstSentence(c.ops.GET?.op.summary) ?? firstSentence(c.ops.GET?.op.description) ?? firstSentence(this.tagDescription(c));
       if (desc) out.description = desc;
       const methods = ['GET', 'POST', 'PATCH', 'DELETE'].filter((m) => c.ops[m]);
       const itemMethods = ['GET', 'PATCH', 'DELETE'].filter((m) => c.itemOps[m]);
       if (c.itemOps.PUT && !c.itemOps.PATCH) { itemMethods.splice(1, 0, 'PATCH'); notes.push('item_methods: PATCH sale del PUT, que Restep no admite'); }
       if (methods.length) out.methods = methods;
+      if (c.idFrom) { out.id_from = c.idFrom; notes.push(`id_from: ${c.idFrom}, porque el cuerpo de creación admite id${c.idFrom === 'client' ? ' y lo exige' : ''} (§5.1)`); }
       if (c.itemPath && itemMethods.length) out.item_methods = itemMethods;
       else if (!c.itemPath) notes.push('no hay ruta de elemento (/{id}) en OpenAPI');
       // Esquemas
@@ -854,7 +985,7 @@ class Context {
         const cm = create && Object.keys(create).find(isJsonMedia);
         if (cm && create[cm].schema) {
           schemas.create = this.toJsonSchema(create[cm].schema);
-          if (this.dropId(schemas.create)) notes.push('schemas.create: se ha quitado id, que asigna el servidor');
+          if (!c.idFrom && this.dropId(schemas.create)) notes.push('schemas.create: se ha quitado id, que asigna el servidor');
         }
         const upd = this.resolve(c.itemOps.PATCH?.op.requestBody)?.content;
         const um = upd ? (Object.keys(upd).find((m) => /merge-patch\+json/i.test(m)) ?? Object.keys(upd).find(isJsonMedia)) : null;
@@ -867,13 +998,17 @@ class Context {
           const pm = put && Object.keys(put).find(isJsonMedia);
           if (pm && put[pm].schema) { schemas.update = this.mergePatchSchema(this.toJsonSchema(put[pm].schema)); this.dropId(schemas.update); notes.push('schemas.update sale del cuerpo del PUT, sin required y con null admitido'); }
         }
+        if (schemas.update && this.dropDefaults(schemas.update)) notes.push('schemas.update: se han quitado los default, que en un PATCH no significan nada (§4.3)');
         if (Object.keys(schemas).length) out.schemas = schemas;
       }
       // Filtros
       const filter = {};
       for (const [field, f] of Object.entries(c.filters ?? {})) {
+        if (!FIELD_PATH_RE.test(field)) { notes.push(`filter.${field}: no sigue la gramática de nombres (§3) y no se declara`); continue; }
         const decl = this.filterType(f.schema, field, c);
-        const ops = f.ops.filter((op) => decl.type !== 'boolean' || ['eq', 'ne', 'null'].includes(op));
+        // §6.1: boolean solo con eq, ne y null; el filtro de id, sin operadores de orden.
+        const ops = f.ops.filter((op) => (decl.type !== 'boolean' || ['eq', 'ne', 'null'].includes(op)) && (field !== 'id' || !['lt', 'le', 'gt', 'ge'].includes(op)));
+        if (ops.length < f.ops.length) notes.push(`filter.${field}: se quitan ${f.ops.filter((op) => !ops.includes(op)).join(', ')}, que §6.1 no permite para ${field === 'id' ? 'id' : 'un boolean'}`);
         if (!ops.length) continue;
         const entry = { type: decl.type, ...(decl.values ? { values: decl.values } : {}), ops };
         const low = f.confidence === 'low' || decl.low;
@@ -882,10 +1017,17 @@ class Context {
         if (low) lowNotes.push(`${c.name}.filter.${field}`);
         filter[field] = entry;
       }
-      if (Object.keys(filter).length) { out.filter = filter; anyQuery = true; }
-      const sort = [...new Set(c.sort ?? [])].filter((s) => /^[^_]/.test(s));
+      const named = {};
+      for (const [field, f] of Object.entries(c.namedFilters ?? {})) {
+        if (field in filter || !NAME_RE.test(field)) continue;
+        const { sources, ...entry } = f;
+        if (ann) { entry['x-confidence'] = 'low'; entry['x-source'] = [...new Set(sources)].join('; '); }
+        lowNotes.push(`${nameOf.get(c)}.named_filters.${field}`);
+        named[field] = entry;
+      }
+      const sort = [...new Set(c.sort ?? [])].filter((s) => FIELD_PATH_RE.test(s));
       if (sort.length) { out.sort = sort; anyQuery = true; }
-      else if (c.sortConfidence === 'low') notes.push('hay un parámetro de orden sin lista de campos: completa sort a mano');
+      if (!sort.length && c.sortConfidence === 'low') notes.push('hay un parámetro de orden sin lista de campos: completa sort a mano');
       if (Number.isInteger(c.maxLimit) && c.maxLimit >= 1) { out.max_limit = c.maxLimit; anyQuery = true; }
       if (c.count || c.countField) { out.count = 'exact'; notes.push('count: se supone exact; usa estimated si el total es aproximado'); anyQuery = true; }
       // Relaciones
@@ -899,16 +1041,16 @@ class Context {
         let rel = null;
         if (k !== 'id' && fk && (t === 'string' || t === 'integer')) {
           const target = this.findCollection(fk[1]);
-          if (target) rel = { name: snake(fk[1]), decl: { to: target.name }, conf: 'low', note: `relación deducida de ${k}: la representación debe pasar a ${snake(fk[1])}: {"id": …}` };
+          if (target) rel = { name: snake(fk[1]), decl: { to: nameOf.get(target) }, conf: 'low', note: `relación deducida de ${k}: la representación debe pasar a ${snake(fk[1])}: {"id": …}` };
         } else if (fks && t === 'array') {
           const target = this.findCollection(fks[1]);
-          if (target) rel = { name: plural(snake(fks[1])), decl: { to: target.name, many: true }, conf: 'low', note: `relación deducida de ${k}: debe pasar a una lista de objetos con id` };
+          if (target) rel = { name: plural(snake(fks[1])), decl: { to: nameOf.get(target), many: true }, conf: 'low', note: `relación deducida de ${k}: debe pasar a una lista de objetos con id` };
         } else if (t === 'object' && this.refName(v0) && bySchema.has(this.refName(v0))) {
-          rel = { name: k, decl: { to: bySchema.get(this.refName(v0)).name, include: true }, conf: 'medium', note: `relación deducida del esquema ${this.refName(v0)} incrustado` };
+          rel = { name: k, decl: { to: nameOf.get(bySchema.get(this.refName(v0))), include: true }, conf: 'medium', note: `relación deducida del esquema ${this.refName(v0)} incrustado` };
         } else if (t === 'object' && 'id' in this.props(v) && Object.keys(this.props(v)).every((x) => ['id', 'type', 'href'].includes(x)) && this.findCollection(k)) {
-          rel = { name: k, decl: { to: this.findCollection(k).name }, conf: 'medium', note: `relación deducida del objeto {id} en ${k}` };
+          rel = { name: k, decl: { to: nameOf.get(this.findCollection(k)) }, conf: 'medium', note: `relación deducida del objeto {id} en ${k}` };
         } else if (t === 'array' && this.refName(v.items) && bySchema.has(this.refName(v.items))) {
-          rel = { name: k, decl: { to: bySchema.get(this.refName(v.items)).name, many: true }, conf: 'medium', note: `relación deducida de la lista de ${this.refName(v.items)}` };
+          rel = { name: k, decl: { to: nameOf.get(bySchema.get(this.refName(v.items))), many: true }, conf: 'medium', note: `relación deducida de la lista de ${this.refName(v.items)}` };
         }
         if (rel) {
           if ((c.includeValues ?? []).includes(rel.name)) rel.decl.include = true;
@@ -918,10 +1060,31 @@ class Context {
         }
       }
       for (const child of c.children) {
-        const decl = { to: nameOf.get(child), many: true, path: child.path };
-        relations[child.segment in relations ? child.name : child.segment] = decl;
+        const decl = { to: nameOf.get(child), many: true, path: templatePath(child.path) };
+        relations[child.segment in relations || !NAME_RE.test(child.segment) ? nameOf.get(child) : child.segment] = decl;
+      }
+      for (const k of Object.keys(relations)) if (!NAME_RE.test(k)) { notes.push(`relations.${k}: no sigue la gramática de nombres (§3) y no se declara`); delete relations[k]; }
+      for (const [k, r] of Object.entries(relations)) {
+        const target = this.collections.find((x) => nameOf.get(x) === r.to);
+        if (!r.many && target?.parent) notes.push(`relations.${k}: su destino es una subcolección, así que cada objeto de la relación lleva href (§3, §5.1)`);
       }
       if (Object.keys(relations).length) { out.relations = relations; anyRelations = true; }
+      // §6.1: ni rutas que atraviesan una relación a muchos ni la que acaba en el id del elemento de
+      // una subcolección se declaran en filter o sort.
+      const forbidden = (path) => {
+        const [first, ...rest] = path.split('.');
+        const r = relations[first];
+        if (!r || !rest.length) return null;
+        if (r.many) return 'atraviesa una relación a muchos';
+        const target = this.collections.find((x) => nameOf.get(x) === r.to);
+        if (rest.join('.') === 'id' && target?.parent) return 'acaba en el id de un elemento de una subcolección';
+        return null;
+      };
+      for (const k of Object.keys(filter)) { const why = forbidden(k); if (why) { notes.push(`filter.${k}: ${why} y no se declara (§6.1)`); delete filter[k]; } }
+      if (Object.keys(filter).length) { out.filter = filter; anyQuery = true; }
+      if (Object.keys(named).length) { out.named_filters = named; anyQuery = true; }
+      const sortOk = sort.filter((k) => { const why = forbidden(k); if (why) notes.push(`sort.${k}: ${why} y no se declara (§6.1)`); return !why; });
+      if (sortOk.length) out.sort = sortOk; else delete out.sort;
       // Acciones
       const actions = {};
       for (const a of c.actions) {
@@ -947,14 +1110,14 @@ class Context {
       }
       if (!c.ops.GET) lowNotes.push(`${c.name} (sin GET de lista en OpenAPI)`);
       c.notes = notes;
-      let key = c.name;
-      for (let i = 2; key in collections; i++) key = `${c.name}_${i}`;
-      collections[key] = out;
+      collections[nameOf.get(c)] = out;
     }
     const profiles = ['core'];
     if (anyQuery) profiles.push('query');
     const writesErrors = [...this.findings.values()].some((f) => f.profile === 'writes' && f.severity === 'error');
     if (this.hasWrites && !writesErrors && !this.findings.has('writes.idempotency')) profiles.push('writes');
+    // cache (§8) solo si toda lectura documenta Cache-Control y todo GET de elemento, ETag.
+    if (this.cacheHint && !this.cacheMissing && this.collections.some((c) => c.ops.GET || c.itemOps.GET)) profiles.push('cache');
     if (anyRelations) profiles.push('relations');
     d.profiles = profiles;
     const extensions = [];
@@ -967,6 +1130,30 @@ class Context {
       d.status = /^[a-z][a-z0-9+.-]*:|^\//i.test(base + this.statusPath) ? base + this.statusPath : '/' + (base + this.statusPath).replace(/^\/*/, '');
     }
     d.collections = collections;
+    // Singletons (§5.9): GET y, si hay PATCH o PUT, PATCH; esquemas item y update.
+    const singletons = {};
+    for (const sg of this.singletons ?? []) {
+      const out = { path: sg.path };
+      out.methods = ['GET', ...(sg.ops.PATCH || sg.ops.PUT ? ['PATCH'] : [])];
+      const desc = firstSentence(sg.ops.GET.op.summary) ?? firstSentence(sg.ops.GET.op.description);
+      if (desc) out.description = desc;
+      if (withSchemas) {
+        const schemas = {};
+        const item = this.successSchema(sg.ops.GET.op, ['200'])?.schema;
+        if (item) schemas.item = this.toJsonSchema(item);
+        const w = sg.ops.PATCH ?? sg.ops.PUT;
+        const body = w && this.resolve(w.op.requestBody)?.content;
+        const bm = body && (Object.keys(body).find((m) => /merge-patch\+json/i.test(m)) ?? Object.keys(body).find(isJsonMedia));
+        if (bm && body[bm].schema && !/json-patch/i.test(bm)) {
+          schemas.update = sg.ops.PATCH ? this.toJsonSchema(body[bm].schema) : this.mergePatchSchema(this.toJsonSchema(body[bm].schema));
+          this.dropDefaults(schemas.update);
+        }
+        if (Object.keys(schemas).length) out.schemas = schemas;
+      }
+      if (ann) { out['x-confidence'] = 'medium'; out['x-source'] = Object.values(sg.ops).map((o) => o.where).join(', ') + (sg.ops.PUT && !sg.ops.PATCH ? ' (el PUT pasa a PATCH)' : ''); }
+      singletons[sg.name] = out;
+    }
+    if (Object.keys(singletons).length) d.singletons = singletons;
     if (ann) d['x-restep-from-openapi'] = {
       generator: `restep-from-openapi ${VERSION}`,
       source: `${this.title}${this.apiVersion ? ` ${this.apiVersion}` : ''} (OpenAPI ${this.openapi})`,
@@ -978,6 +1165,15 @@ class Context {
   }
 
   // Quita id de un esquema de cuerpo (5.1: lo asigna el servidor y no cambia).
+  // §4.3: en update un default no significa nada (lo ausente de un PATCH no cambia); en OpenAPI sí lo
+  // tiene un cuerpo de PUT, que es de donde suele salir. Se quitan los de primer nivel.
+  dropDefaults(s) {
+    if (!isObject(s?.properties)) return false;
+    let dropped = false;
+    for (const p of Object.values(s.properties)) if (isObject(p) && 'default' in p) { delete p.default; dropped = true; }
+    return dropped;
+  }
+
   dropId(s) {
     if (!isObject(s?.properties) || !('id' in s.properties)) return false;
     delete s.properties.id;
@@ -1050,7 +1246,13 @@ class Context {
     if (s.exclusiveMinimum === true) delete out.minimum;
     if (s.exclusiveMaximum === true) delete out.maximum;
     if (s.example !== undefined && out.examples === undefined) out.examples = [s.example];
+    // Las etiquetas de un enum (x-enumNames, de NSwag y otros) pasan a un oneOf de const con title, que
+    // es como Restep da las opciones de un formulario con su etiqueta (§4.3, apéndice A).
+    const names = s['x-enumNames'];
+    const labelled = Array.isArray(s.enum) && Array.isArray(names) && names.length === s.enum.length && names.every((x) => typeof x === 'string');
+    if (labelled) { out.oneOf = s.enum.map((v, i) => ({ const: v, title: names[i] })); delete out.enum; }
     if (s.nullable === true) {
+      if (labelled) out.oneOf.push({ type: 'null' });
       if (typeof out.type === 'string') out.type = [out.type, 'null'];
       else if (Array.isArray(out.type) && !out.type.includes('null')) out.type = [...out.type, 'null'];
       else if (!out.type) return { anyOf: [out, { type: 'null' }] };
@@ -1080,6 +1282,7 @@ class Context {
       core: true,
       query: this.collections.some((c) => c.ops.GET) || findings.some((f) => f.profile === 'query'),
       writes: this.hasWrites,
+      cache: !!this.cacheHint,
       relations: findings.some((f) => f.profile === 'relations') || this.passes.some((p) => p.profile === 'relations') || Object.values(this.discovery.collections).some((c) => c.relations),
       sync: !!this.syncHint,
     };
@@ -1088,7 +1291,7 @@ class Context {
       const fs = findings.filter((f) => f.profile === p);
       const errors = fs.filter((f) => f.severity === 'error').length;
       const warnings = fs.filter((f) => f.severity === 'warning').length;
-      if (!relevant[p]) { scores[p] = { score: null, errors, warnings, note: p === 'sync' ? 'sin indicios de sincronización en la descripción' : p === 'writes' ? 'la API no tiene escrituras' : 'nada que evaluar' }; continue; }
+      if (!relevant[p]) { scores[p] = { score: null, errors, warnings, note: p === 'sync' ? 'sin indicios de sincronización en la descripción' : p === 'writes' ? 'la API no tiene escrituras' : p === 'cache' ? 'ninguna lectura documenta Cache-Control' : 'nada que evaluar' }; continue; }
       let penalty = 0;
       for (const f of fs) {
         if (f.severity === 'info') continue;
@@ -1114,7 +1317,7 @@ class Context {
 // ── Informe ─────────────────────────────────────────────────────────────────
 
 const SEVERITY = { error: 'Error', warning: 'Aviso', info: 'Nota' };
-const PROFILE_TITLES = { core: 'core (obligatorio)', query: 'query', writes: 'writes', relations: 'relations', sync: 'sync', extensions: 'Extensiones' };
+const PROFILE_TITLES = { core: 'core (obligatorio)', query: 'query', writes: 'writes', cache: 'cache', relations: 'relations', sync: 'sync', extensions: 'Extensiones' };
 const MAX_WHERE = 8;
 
 export function renderReport(r, { source, validation } = {}) {
