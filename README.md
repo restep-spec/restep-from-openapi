@@ -20,10 +20,10 @@ módulos (YAML y JSON Schema), Node 18+, sin dependencias.
 ## Uso
 
 ```bash
-node tools/restep-from-openapi/restep-from-openapi.mjs openapi.yaml                  # informe por la salida estándar
-node tools/restep-from-openapi/restep-from-openapi.mjs openapi.json \
-  --out discovery.json --report informe.md                                          # los dos archivos y un resumen
-node tools/restep-from-openapi/restep-from-openapi.mjs https://api.example.com/openapi.yaml --json
+npx restep-from-openapi openapi.yaml               # informe por la salida estándar
+npx restep-from-openapi openapi.json \
+  --out discovery.json --report informe.md   # los dos archivos y un resumen
+npx restep-from-openapi https://api.example.com/openapi.yaml --json
 ```
 
 | Opción | Qué hace |
