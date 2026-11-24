@@ -1,203 +1,202 @@
-# restep-from-openapi (prototipo)
+# restep-from-openapi (prototype)
 
-Lee una API descrita en OpenAPI 3.0, 3.1 o 3.2 (JSON o YAML, archivo o URL) y produce:
+Reads an API described in OpenAPI 3.0, 3.1 or 3.2 (JSON or YAML, file or URL) and produces:
 
-1. Un **informe** de lo que le falta para cumplir [Restep 1](https://restep.wubytes.com/es/1/),
-   perfil a perfil, con una puntuación orientativa por perfil. Cada hallazgo cita el apartado de
-   la especificación y las operaciones de OpenAPI donde aparece (`GET /pets?page`,
-   `esquema Pet.id`…), y dice qué hacer.
-2. Un **borrador del documento de descubrimiento** (§4.2) que valida contra
-   [`discovery.json`](https://restep.wubytes.com/1/schema/discovery.json) y declara
-   `"restep": "1.0-draft.6"`, el texto que sigue la herramienta (§1.1): colecciones y elementos
-   por las rutas, singletons, métodos, esquemas, filtros, filtros con nombre, orden,
-   `max_limit`, relaciones y acciones, con lo deducido con poca confianza marcado.
+1. A **report** of what it lacks to comply with [Restep 1](https://restep.wubytes.com/1/),
+   profile by profile, with a rough score per profile. Each finding cites the section of the
+   specification and the OpenAPI operations where it shows up (`GET /pets?page`,
+   `esquema Pet.id`…), and says what to do.
+2. A **draft discovery document** (§4.2) that validates against
+   [`discovery.json`](https://restep.wubytes.com/1/schema/discovery.json) and declares
+   `"restep": "1.0-draft.6"`, the text the tool follows (§1.1): collections and items from the
+   paths, singletons, methods, schemas, filters, named filters, sorting, `max_limit`, relations
+   and actions, with low-confidence deductions marked.
 
-Solo lee la descripción: no llama a la API. Lo que la descripción no documenta (una `ETag`, los
-códigos de error) cuenta como ausente. Para comprobar un servidor de verdad está
-[`restep-check`](https://restep.wubytes.com/es/herramientas/). Un archivo principal más dos
-módulos (YAML y JSON Schema), Node 18+, sin dependencias.
+It only reads the description: it does not call the API. Whatever the description does not
+document (an `ETag`, the error codes) counts as missing. To check a real server there is
+[`restep-check`](https://restep.wubytes.com/tools/). One main file plus two modules (YAML and JSON
+Schema), Node 18+, no dependencies.
 
-## Uso
+## Usage
 
 ```bash
-npx restep-from-openapi openapi.yaml               # informe por la salida estándar
+npx restep-from-openapi openapi.yaml               # report on standard output
 npx restep-from-openapi openapi.json \
-  --out discovery.json --report informe.md   # los dos archivos y un resumen
+  --out discovery.json --report report.md    # both files and a summary
 npx restep-from-openapi https://api.example.com/openapi.yaml --json
 ```
 
-| Opción | Qué hace |
+| Option | What it does |
 |---|---|
-| `--out <archivo>` | Escribe el borrador del descubrimiento (JSON). |
-| `--report <archivo>` | Escribe el informe en Markdown; por la salida estándar sale solo el resumen de puntuaciones. Sin ella, el informe entero va a la salida estándar. |
-| `--json` | Saca el resultado completo en JSON (hallazgos, lo que ya cumple, puntuaciones, borrador y su validación). |
-| `--no-schemas` | No copia los esquemas de OpenAPI en `schemas` ni en el `input` de las acciones (el borrador queda mucho más corto). |
-| `--no-annotations` | Sin los miembros `x-confidence`, `x-source` y `x-restep-from-openapi`. |
+| `--out <file>` | Writes the draft discovery document (JSON). |
+| `--report <file>` | Writes the report in Markdown; only the score summary goes to standard output. Without it, the whole report goes to standard output. |
+| `--json` | Outputs the full result as JSON (findings, what already complies, scores, the draft and its validation). |
+| `--no-schemas` | Does not copy the OpenAPI schemas into `schemas` or into the actions' `input` (the draft gets much shorter). |
+| `--no-annotations` | Without the `x-confidence`, `x-source` and `x-restep-from-openapi` members. |
 
-Códigos de salida: `0` bien (aunque haya hallazgos), `1` no se pudo leer la descripción, `2` uso
-incorrecto. Si el borrador no validara contra el esquema, lo avisa por la salida de errores.
+Exit codes: `0` fine (even with findings), `1` the description could not be read, `2` wrong usage.
+If the draft does not validate against the schema, it says so on standard error.
 
-El esquema `discovery.json` se busca en `./schema/` junto al archivo y, si no está, en `https://restep.wubytes.com/1/schema/discovery.json`.
-Sin ninguno, el informe dice que no se ha validado.
+The `discovery.json` schema is looked up in `./schema/` next to the file and, failing that, at `https://restep.wubytes.com/1/schema/discovery.json`.
+With none of them, the report says it has not been validated.
 
-## Qué detecta
+## What it detects
 
-Por perfil; entre paréntesis, el apartado de la especificación. Un **error** incumple un DEBE
-que la descripción deja ver; un **aviso** es un DEBE que probablemente falla o un DEBERÍA; una
-**nota** no resta puntos.
+By profile; in brackets, the section of the specification. An **error** breaks a MUST that the
+description makes visible; a **warning** is a MUST that probably fails, or a SHOULD; a **note**
+does not take points off.
 
-| Perfil | Hallazgos |
+| Profile | Findings |
 |---|---|
-| core | Cuerpo de un `POST` a una colección o una acción que no es `application/json` (formularios, multipart) (3); lista como array suelto, sin `items` o sin `next` (5.2); `PUT`, `PATCH` sin Merge Patch o con JSON Patch, `POST` que crea sin `201` o sin `Location`, `POST` sobre un elemento, `DELETE` sin `204`, rutas estilo RPC (`/getContacts`) (5.1); cuerpo de creación que admite `id`, que pasa a `id_from` (nota, 5.1); recursos de un solo objeto que pasan a singleton y recursos fuera de Restep (notas, 5.9); operaciones, parámetros o campos `deprecated` (nota, 5.5); parámetros con `$` y reservados usados con otro significado (`since` como fecha, `sort=asc`) (5.3); errores que no son `problem+json`, `problem+json` sin `code`, `success`/`ok` en un `200` (5.4); versión en cabecera, query o tipo de medio, o `/v1.2/` (5.5); `id` numérico o ausente, campos con `_`, enteros de 64 bits, importes como número, instantes como número o sin formato, mezcla de camelCase y snake_case (3) |
-| query | Paginación por `offset`/`page` (también en la respuesta: `page`, `total_pages`), cursor con otro nombre, `page_size`/`per_page` en vez de `limit`, `limit` sin máximo, que el borrador 6 exige declarar (6.4); filtros con nombres propios (`status`, `min_price`, `created_after`), con la traducción a `filter[price][ge]` (6.1); filtros sobre un campo que es una lista (`tags`), que pasan a filtro con nombre, o que atraviesan una (6.1); `sort_by`/`order` (6.2); `select` (6.3); `include_total` (6.5); búsquedas en su propia ruta (`/pets/findByStatus`) y texto libre `q`, que pasa a filtro con nombre (nota) |
-| writes | Sin `ETag` en el `GET` del elemento, sin `If-Match` (ni `412`) en `PATCH`/`PUT`/`DELETE` (7.2); `POST` sin `Idempotency-Key` o con otro nombre (`X-Idempotency-Key`) (7.1) |
-| cache | `Cache-Control` sin documentar en las lecturas (nota, 8). Desde el borrador 6 es un perfil aparte de writes; si ninguna lectura documenta `Cache-Control`, no se puntúa |
-| relations | Relaciones como identificador suelto (`owner_id`) o lista de identificadores (`pet_ids`) (3); `expand`/`embed` en vez de `include` (9) |
-| sync | Parámetros como `modified_since`, rutas `/changes` o `/delta`, webhooks; si hay alguno, falta `:changes` y `state` (10). Sin indicios, sync no se puntúa |
-| Extensiones | Verbos en la URL que deberían ser acciones con dos puntos (11.1); `/bulk` y `/batch` (11.2); `filter` como cadena (11.3); búsquedas por `POST` (11.4); OAuth 2.0 (anunciar `oauth`) y credenciales en la query (11.5) |
+| core | Body of a `POST` to a collection or an action that is not `application/json` (forms, multipart) (3); list as a bare array, without `items` or without `next` (5.2); `PUT`, `PATCH` without Merge Patch or with JSON Patch, `POST` that creates without `201` or without `Location`, `POST` on an item, `DELETE` without `204`, RPC-style paths (`/getContacts`) (5.1); creation body that accepts `id`, which becomes `id_from` (note, 5.1); single-object resources that become singletons and resources outside Restep (notes, 5.9); `deprecated` operations, parameters or fields (note, 5.5); parameters with `$` and reserved ones used with another meaning (`since` as a date, `sort=asc`) (5.3); errors that are not `problem+json`, `problem+json` without `code`, `success`/`ok` in a `200` (5.4); version in a header, query or media type, or `/v1.2/` (5.5); numeric or missing `id`, fields with `_`, 64-bit integers, amounts as numbers, instants as numbers or without a format, mixed camelCase and snake_case (3) |
+| query | Pagination by `offset`/`page` (also in the response: `page`, `total_pages`), cursor under another name, `page_size`/`per_page` instead of `limit`, `limit` without a maximum, which draft 6 requires to be declared (6.4); filters with their own names (`status`, `min_price`, `created_after`), with the translation to `filter[price][ge]` (6.1); filters on a field that is a list (`tags`), which become named filters, or that go through one (6.1); `sort_by`/`order` (6.2); `select` (6.3); `include_total` (6.5); searches on their own path (`/pets/findByStatus`) and free text `q`, which becomes a named filter (note) |
+| writes | No `ETag` on the item `GET`, no `If-Match` (or `412`) on `PATCH`/`PUT`/`DELETE` (7.2); `POST` without `Idempotency-Key` or with another name (`X-Idempotency-Key`) (7.1) |
+| cache | `Cache-Control` undocumented on reads (note, 8). Since draft 6 it is a profile separate from writes; if no read documents `Cache-Control`, it is not scored |
+| relations | Relations as a bare identifier (`owner_id`) or a list of identifiers (`pet_ids`) (3); `expand`/`embed` instead of `include` (9) |
+| sync | Parameters such as `modified_since`, `/changes` or `/delta` paths, webhooks; if there is any, `:changes` and `state` are missing (10). With no hints, sync is not scored |
+| Extensions | Verbs in the URL that should be colon actions (11.1); `/bulk` and `/batch` (11.2); `filter` as a string (11.3); searches via `POST` (11.4); OAuth 2.0 (announce `oauth`) and credentials in the query (11.5) |
 
-También lista lo que ya cumple (problem+json, Merge Patch, `ETag`, `If-Match`,
-`Idempotency-Key`, `items`/`next`, `cursor`, `filter[campo][op]`, `sort`, `include`, acciones con
-dos puntos…), salvo que otra operación lo incumpla.
+It also lists what already complies (problem+json, Merge Patch, `ETag`, `If-Match`,
+`Idempotency-Key`, `items`/`next`, `cursor`, `filter[field][op]`, `sort`, `include`, colon
+actions…), unless another operation breaks it.
 
-**Puntuación**: 100 menos 15 por cada tipo de error y 6 por cada tipo de aviso, más 2 por cada
-lugar extra donde se repite (hasta 8 por tipo); las notas no restan; mínimo 0. Un perfil sin nada
-que evaluar (sync sin indicios, writes sin escrituras) sale como «—». Es orientativa: sirve para
-comparar API y seguir el progreso, no certifica nada.
+**Score**: 100 minus 15 for each kind of error and 6 for each kind of warning, plus 2 for each
+extra place where it repeats (up to 8 per kind); notes take nothing off; minimum 0. A profile with
+nothing to evaluate (sync with no hints, writes with no writes) shows as "—". It is a rough guide:
+it helps compare APIs and track progress, it does not certify anything.
 
-## El borrador del descubrimiento
+## The draft discovery document
 
-- **Raíz**: `servers[0].url` más el prefijo común de las rutas si acaba en una versión (`/api/v2`),
-  que sale de las rutas y da `"version"`.
-- **Colecciones**: una ruta que acaba en un segmento literal y lista (array o envoltorio con un
-  array), crea (`POST` con `201`) o tiene elementos (`/x/{id}`). Las subcolecciones
-  (`/books/{id}/reviews`) llevan la plantilla en `path`, nombran en `parent` la colección de la
-  que cuelgan y se declaran también como relación a muchos del padre. Las variables de la
-  plantilla se dejan como en OpenAPI salvo que se repitan o no sean simples (§4.2): entonces se
-  renombran (`/authors/{id}/books/{id}/reviews` → `/authors/{id}/books/{book_id}/reviews`). Si
-  dos colecciones acaban igual, la del padre va delante (`books_reviews`). Las claves siguen la
-  gramática de nombres (§3).
-- **Singletons** (§5.9): una ruta sin variables, que no cuelga de una colección, cuyo `GET`
-  devuelve un objeto y que no admite más que `GET`, `PATCH` o `PUT` (que pasa a `PATCH`), como
-  `/me` o `/settings`. Lleva `methods`, `description` y esquemas `item` y `update`. Un recurso
-  suelto con `POST` o `DELETE`, o bajo la ruta de una colección, queda fuera de Restep con una
-  nota.
-- **`id_from`** (§5.1): si el cuerpo de creación admite `id` sin `readOnly`, `"client"` si es
-  obligatorio y `"either"` si no, y el `id` se queda en `create`.
-- **Métodos**: los de OpenAPI entre `GET`, `POST`, `PATCH` y `DELETE`; un `PUT` de elemento
-  pasa a `PATCH`, con nota.
-- **Esquemas**: `item` (el `GET` del elemento o el de la lista), `create` (cuerpo del `POST`, sin
-  `id`) y `update` (cuerpo del `PATCH`, o el del `PUT` sin `required` y con `null` admitido),
-  pasados a JSON Schema 2020-12 (`nullable`, `example`, `exclusiveMinimum` booleano) y con los
-  `$ref` locales resueltos; un ciclo se corta. `title`, `description`, `default` y `examples`
-  pasan tal cual, porque son lo que usa un formulario (§4.3, apéndice A); las etiquetas de un enum
-  en `x-enumNames` pasan a un `oneOf` de `const` con `title`, y `update` se queda sin `default`,
-  que en un `PATCH` no significa nada.
-- **Filtros**: de los parámetros de la lista. `filter[campo][op]` y un `filter` `deepObject` se
-  leen tal cual; los nombres libres se traducen (`min_price` → `price` `ge`, `created_after` →
-  `created_at` `gt`, un array → `in`). El tipo sale del campo del elemento si existe (`decimal`
-  para importes y cadenas con patrón decimal, `datetime`, `date`, `enum` con sus `values`). Por
-  §6.1 no declara operadores de orden en `id` ni otros que `eq`, `ne` y `null` en un `boolean`,
-  ni un filtro (u orden) sobre un campo que es una lista, por una relación a muchos o hasta el
-  `id` del elemento de una subcolección.
-- **Filtros con nombre** (§6.1): un parámetro sobre un campo que es una lista (`tags`) y la
-  búsqueda libre (`q`, `search`) pasan a `named_filters`, con `type` y una descripción que hay
-  que revisar, porque es lo que da su significado al filtro.
-- **Orden**: los valores de `sort`/`sort_by`/`order_by` cuando son una enumeración.
-- **`max_limit`**: el `maximum` de `limit`/`per_page`/`page_size`. **`count`**: `exact` si la
-  lista lleva `total` o hay `count`/`include_total`.
-- **Relaciones**: `owner_id` → `owner` (si existe la colección `owners`), `pet_ids` → `pets`,
-  un objeto `{id}` o un esquema de otra colección incrustado; `include: true` si el parámetro
-  `include` lo enumera.
-- **Acciones**: `POST /orders/{id}:cancel` y `POST /orders/{id}/cancel` (un verbo conocido); una
-  acción `GET` queda como `safe` con `"method": "GET"`; `idempotent` en una acción `POST` es una
-  suposición (`false`).
-- **Perfiles**: `core`; `query` si hay filtros, filtros con nombre, orden o `max_limit`;
-  `writes` solo si la descripción no deja ver errores de writes; `cache` si todas las lecturas
-  documentan `Cache-Control` y todos los `GET` de elemento, `ETag`; `relations` si hay
-  relaciones; extensiones `actions` y `oauth` si toca. Ninguna parte experimental (§1.2).
-  `status` sale de `/health`, `/status` o parecidas.
+- **Root**: `servers[0].url` plus the common prefix of the paths if it ends in a version
+  (`/api/v2`), which comes from the paths and gives `"version"`.
+- **Collections**: a path that ends in a literal segment and lists (an array or a wrapper with an
+  array), creates (`POST` with `201`) or has items (`/x/{id}`). Subcollections
+  (`/books/{id}/reviews`) carry the template in `path`, name in `parent` the collection they hang
+  from, and are also declared as a to-many relation of the parent. Template variables are kept as
+  in OpenAPI unless they repeat or are not simple (§4.2): then they are renamed
+  (`/authors/{id}/books/{id}/reviews` → `/authors/{id}/books/{book_id}/reviews`). If two
+  collections end the same way, the parent's name goes first (`books_reviews`). The keys follow
+  the naming grammar (§3).
+- **Singletons** (§5.9): a path with no variables, not hanging from a collection, whose `GET`
+  returns an object and that allows nothing but `GET`, `PATCH` or `PUT` (which becomes `PATCH`),
+  such as `/me` or `/settings`. It gets `methods`, `description` and `item` and `update` schemas. A
+  standalone resource with `POST` or `DELETE`, or under a collection's path, is left outside
+  Restep with a note.
+- **`id_from`** (§5.1): if the creation body accepts `id` without `readOnly`, `"client"` if it is
+  required and `"either"` if not, and the `id` stays in `create`.
+- **Methods**: OpenAPI's among `GET`, `POST`, `PATCH` and `DELETE`; an item `PUT` becomes `PATCH`,
+  with a note.
+- **Schemas**: `item` (the item `GET` or the list's), `create` (the `POST` body, without `id`) and
+  `update` (the `PATCH` body, or the `PUT` one without `required` and with `null` allowed),
+  converted to JSON Schema 2020-12 (`nullable`, `example`, boolean `exclusiveMinimum`) and with
+  local `$ref` resolved; a cycle is cut. `title`, `description`, `default` and `examples` pass
+  through as they are, because they are what a form uses (§4.3, appendix A); enum labels in
+  `x-enumNames` become a `oneOf` of `const` with `title`, and `update` loses `default`, which means
+  nothing in a `PATCH`.
+- **Filters**: from the list's parameters. `filter[field][op]` and a `deepObject` `filter` are
+  read as they are; free names are translated (`min_price` → `price` `ge`, `created_after` →
+  `created_at` `gt`, an array → `in`). The type comes from the item's field if there is one
+  (`decimal` for amounts and strings with a decimal pattern, `datetime`, `date`, `enum` with its
+  `values`). Per §6.1 it does not declare ordering operators on `id`, operators other than `eq`,
+  `ne` and `null` on a `boolean`, or a filter (or sort) on a field that is a list, through a to-many
+  relation, or down to the `id` of a subcollection item.
+- **Named filters** (§6.1): a parameter on a field that is a list (`tags`) and free-text search
+  (`q`, `search`) become `named_filters`, with `type` and a description that needs reviewing,
+  because it is what gives the filter its meaning.
+- **Sorting**: the values of `sort`/`sort_by`/`order_by` when they are an enumeration.
+- **`max_limit`**: the `maximum` of `limit`/`per_page`/`page_size`. **`count`**: `exact` if the
+  list carries `total` or there is `count`/`include_total`.
+- **Relations**: `owner_id` → `owner` (if the `owners` collection exists), `pet_ids` → `pets`, an
+  `{id}` object or an embedded schema from another collection; `include: true` if the `include`
+  parameter lists it.
+- **Actions**: `POST /orders/{id}:cancel` and `POST /orders/{id}/cancel` (a known verb); a `GET`
+  action becomes `safe` with `"method": "GET"`; `idempotent` on a `POST` action is a guess
+  (`false`).
+- **Profiles**: `core`; `query` if there are filters, named filters, sorting or `max_limit`;
+  `writes` only if the description shows no writes errors; `cache` if every read documents
+  `Cache-Control` and every item `GET`, `ETag`; `relations` if there are relations; the `actions`
+  and `oauth` extensions where they apply. No experimental part (§1.2). `status` comes from
+  `/health`, `/status` or similar.
 
-Cada objeto deducido lleva `x-confidence` (`medium` o `low`) y `x-source` (de dónde sale), y cada
-colección `x-restep-from-openapi` con su confianza y notas. Son miembros `x-` que la spec permite
-(§4.2), así que el borrador valida igual, pero hay que revisarlos y quitarlos antes de publicarlo
-(`--no-annotations` los quita).
+Every deduced object carries `x-confidence` (`medium` or `low`) and `x-source` (where it comes
+from), and every collection `x-restep-from-openapi` with its confidence and notes. They are `x-`
+members, which the spec allows (§4.2), so the draft still validates, but they need reviewing and
+removing before publishing it (`--no-annotations` removes them).
 
 ## YAML
 
-El analizador YAML es propio y cubre lo que usan las descripciones OpenAPI: mapas y listas por
-bloques, escalares con y sin comillas (también en varias líneas), bloques `|` y `>` con sus
-indicadores, colecciones en línea, comentarios, anclas, alias y `<<`. No admite varios documentos
-en un archivo (lee el primero), claves complejas (`? `) ni tabuladores en el sangrado, y no sigue
-`$ref` a otros archivos (los anota en el informe). Si un YAML no se puede leer, conviértelo a JSON
-y pásale el JSON:
+The YAML parser is its own and covers what OpenAPI descriptions use: block maps and lists, quoted
+and unquoted scalars (also multi-line), `|` and `>` blocks with their indicators, flow
+collections, comments, anchors, aliases and `<<`. It does not support several documents in one
+file (it reads the first), complex keys (`? `) or tabs in indentation, and it does not follow
+`$ref` to other files (it notes them in the report). If a YAML file cannot be read, convert it to
+JSON and pass the JSON:
 
 ```bash
 yq -o=json openapi.yaml > openapi.json
-npx @redocly/cli bundle openapi.yaml -o openapi.json   # también junta los $ref a otros archivos
+npx @redocly/cli bundle openapi.yaml -o openapi.json   # also bundles $ref to other files
 ```
 
-Swagger 2.0 no está admitido: conviértelo antes (`npx swagger2openapi swagger.json -o openapi.json`).
+Swagger 2.0 is not supported: convert it first (`npx swagger2openapi swagger.json -o openapi.json`).
 
-## Pruebas
+## Tests
 
 ```bash
-node tools/restep-from-openapi/test.mjs      # desde projects/restep
+node tools/restep-from-openapi/test.mjs      # from projects/restep
 ```
 
-Prueban el analizador YAML, el validador JSON Schema (también contra el descubrimiento del
-servidor de referencia, que arranca en el puerto 8881), los hallazgos y el borrador de tres
-fixtures, que el borrador valida contra `schema/discovery.json`, una descripción en
-línea con lo nuevo del borrador 6 (singletons, `id_from`, subcolecciones anidadas, filtros que
-§6.1 no deja declarar, `Content-Type`, cache y `deprecated`), y la CLI (archivos,
-`--json`, una URL servida en el puerto 8880 y los errores).
+They test the YAML parser, the JSON Schema validator (also against the reference server's
+discovery document, started on port 8881), the findings and the draft for three fixtures, which
+the draft validates against `schema/discovery.json`, an inline description with what is
+new in draft 6 (singletons, `id_from`, nested subcollections, filters §6.1 does not allow
+declaring, `Content-Type`, cache and `deprecated`), and the CLI (files, `--json`, a URL served on
+port 8880 and the errors).
 
-Los fixtures de `fixtures/`:
+The fixtures in `fixtures/`:
 
-- `petstore-ampliada.yaml` (3.0, YAML): el Petstore con pedidos y clientes y los vicios habituales
-  (paginación por página, arrays sueltos, `PUT`, JSON Patch, errores propios, `id` numérico,
-  verbos en la URL, `findByStatus`).
-- `casi-restep.json` (3.1, JSON): una librería casi Restep (problem+json, Merge Patch, `ETag`,
-  `If-Match`, `Idempotency-Key`, `filter[…]`, subcolección, acción `:reserve`, OAuth 2.0). Debe
-  salir sin errores ni avisos.
-- `legado-crm.yaml` (3.1, YAML): un CRM con rutas `/api/v2/getContacts`, OData (`$top`),
-  versión en cabecera, `since` como fecha, `sort=asc`, `nextPageToken`, webhooks, `/bulk` y
-  clave en la query.
+- `petstore-ampliada.yaml` (3.0, YAML): the Petstore with orders and customers and the usual bad
+  habits (page-based pagination, bare arrays, `PUT`, JSON Patch, custom errors, numeric `id`, verbs
+  in the URL, `findByStatus`).
+- `casi-restep.json` (3.1, JSON): an almost-Restep bookshop (problem+json, Merge Patch, `ETag`,
+  `If-Match`, `Idempotency-Key`, `filter[…]`, subcollection, `:reserve` action, OAuth 2.0). It must
+  come out with no errors or warnings.
+- `legado-crm.yaml` (3.1, YAML): a CRM with `/api/v2/getContacts` paths, OData (`$top`), version in
+  a header, `since` as a date, `sort=asc`, `nextPageToken`, webhooks, `/bulk` and a key in the
+  query.
 
-## Límites
+## Limits
 
-- Deduce por nombres y formas. Un filtro con nombre raro, un verbo que no está en su lista o un
-  envoltorio de lista poco habitual se le escapan o se clasifican mal; por eso marca la confianza.
-- No sigue `$ref` externos ni `callbacks`/`links` más allá de anotarlos.
-- No detecta mapas de idioma (§3) ni `inherit` (§11.6): en OpenAPI no se distinguen de un objeto
-  cualquiera.
-- Lo que OpenAPI no dice, el borrador no lo declara: `collations` (§6.1; un campo sin declarar
-  compara por puntos de código), `idempotency.anonymous` (§7.1), `deprecations` (§5.5: falta el
-  instante `announced`; lo `deprecated` sale como nota), `sync` (§10) ni ninguna otra parte
-  experimental, ni `count` estimado.
-- No comprueba lo que solo se ve en la API en marcha: el `415` a otros tipos de medio, el `+`
-  leído como espacio, `_etag` en cada elemento, el `403` del origen (§5.8)…
-- No lee `x-` propias de cada generador (como `x-pagination`) ni los ejemplos.
-- Las colecciones sin `GET` de lista (solo `POST` y elementos) entran en el borrador con
-  confianza baja.
+- It deduces from names and shapes. An oddly named filter, a verb not on its list or an unusual
+  list wrapper slips through or is misclassified; that is why it marks confidence.
+- It does not follow external `$ref` or `callbacks`/`links` beyond noting them.
+- It does not detect language maps (§3) or `inherit` (§11.6): in OpenAPI they cannot be told apart
+  from any other object.
+- What OpenAPI does not say, the draft does not declare: `collations` (§6.1; an undeclared field
+  compares by code points), `idempotency.anonymous` (§7.1), `deprecations` (§5.5: the `announced`
+  instant is missing; anything `deprecated` comes out as a note), `sync` (§10) or any other
+  experimental part, or an estimated `count`.
+- It does not check what only shows on the running API: the `415` to other media types, `+` read
+  as a space, `_etag` on every item, the origin `403` (§5.8)…
+- It does not read each generator's own `x-` extensions (such as `x-pagination`) or the examples.
+- Collections without a list `GET` (only `POST` and items) go into the draft with low confidence.
 
-## Dudas sobre la spec
+## Questions about the spec
 
-El borrador 6 resolvió tres de las dudas que había aquí: los recursos sueltos son singletons o
-quedan fuera de Restep (§5.9), el cliente puede elegir el `id` con `id_from` (§5.1) y un campo
-que es una lista no se declara en `filter` (§6.1; la herramienta propone un filtro con nombre).
+Draft 6 settled three of the questions that were here: standalone resources are singletons or stay
+outside Restep (§5.9), the client can choose the `id` with `id_from` (§5.1), and a field that is a
+list is not declared in `filter` (§6.1; the tool proposes a named filter).
 
-- **`count` exacto o estimado.** Una descripción OpenAPI no lo dice; la herramienta supone `exact`
-  y lo anota. No es un hueco de la spec, pero un borrador no puede saberlo.
-- **Singleton bajo una ruta de colección.** §5.9 prohíbe una ruta «que una colección o un elemento
-  tenga o pueda tener». `/books/featured` lo es (podría ser un elemento); no queda claro si lo es
-  también `/books/7/summary`, que solo una subcolección no declarada podría tener. La herramienta
-  descarta cualquier ruta que empiece por la de una colección.
+- **Exact or estimated `count`.** An OpenAPI description does not say; the tool assumes `exact`
+  and notes it. It is not a gap in the spec, but a draft cannot know.
+- **Singleton under a collection path.** §5.9 forbids a path "that a collection or an item has or
+  may have". `/books/featured` is one (it could be an item); it is not clear whether
+  `/books/7/summary` is too, which only an undeclared subcollection could have. The tool discards
+  any path that starts with a collection's path.
 
-## Código y avisos
+## Code and issues
 
-Código y avisos: <https://github.com/restep-spec/restep-from-openapi>. Ese repositorio se genera desde la web de
-Restep, donde la herramienta se desarrolla junto a la [especificación](https://restep.wubytes.com/1/) y el servidor de
-referencia: `vendor/` y `schema/` son copias de la web para que las pruebas funcionen solas.
+Code and issues: <https://github.com/restep-spec/restep-from-openapi>. That repository is generated from the Restep
+site, where the tool is developed alongside the [specification](https://restep.wubytes.com/1/) and the reference
+server: `vendor/` and `schema/` are copies from the site so the tests run on their own.
 
-Licencia MIT.
+MIT licensed.
