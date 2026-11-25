@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// restep-from-openapi: lee una API descrita en OpenAPI 3.0, 3.1 o 3.2 y dice qué le falta para
-// cumplir Restep 1 (https://restep.wubytes.com/es/1/), perfil a perfil, y escribe un borrador de su
-// documento de descubrimiento (§4.2). Node 18 o posterior, sin dependencias.
+// restep-from-openapi: reads an API described in OpenAPI 3.0, 3.1 or 3.2 and says what it lacks to
+// comply with Restep 1 (https://restep.wubytes.com/1/), profile by profile, and writes a draft of its
+// discovery document (§4.2). Node 18 or later, no dependencies.
 //
-// Uso:
-//   restep-from-openapi <openapi.json|openapi.yaml|URL> [--out discovery.json] [--report informe.md]
+// Usage:
+//   restep-from-openapi <openapi.json|openapi.yaml|URL> [--out discovery.json] [--report report.md]
 //                       [--json] [--no-schemas] [--no-annotations]
 //
-// Solo lee la descripción: no llama a la API. Para comprobar un servidor de verdad está restep-check.
+// It only reads the description: it does not call the API. To check a real server use restep-check.
 import { readFile, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -16,58 +16,60 @@ import { validate } from './json-schema.mjs';
 
 export { parseYaml, validate };
 
-const VERSION = '0.2.0';
-const SPEC = 'https://restep.wubytes.com/es/1/';
+const VERSION = '0.3.0';
+const SPEC = 'https://restep.wubytes.com/1/';
 const SCHEMA_URL = 'https://restep.wubytes.com/1/schema/discovery.json';
 const HTTP_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace', 'query'];
 const PROFILES = ['core', 'query', 'writes', 'cache', 'relations', 'sync'];
-// Versión de Restep que declara el borrador: el texto que sigue esta herramienta (§1.1).
-export const RESTEP_VERSION = '1.0-draft.6';
+// Restep version that the draft declares: the text this tool follows (§1.1).
+export const RESTEP_VERSION = '1.0-draft.7';
+// §6.1: the operators of this version; a server MUST NOT declare another.
+const OPERATORS = ['eq', 'ne', 'lt', 'le', 'gt', 'ge', 'in', 'nin', 'null', 'prefix', 'contains'];
 
-// Apartado de la spec → ancla de la página en español.
+// Spec section → anchor on the Spanish page.
 const ANCHORS = {
-  '1.1': 'versiones-restep', '1.2': 'dependencias', '3': 'datos', '4.1': 'cabecera-perfil', '4.2': 'descubrimiento', '4.3': 'describir', '4.4': 'salud',
-  '5.1': 'recursos', '5.2': 'colecciones', '5.3': 'reservados', '5.4': 'errores', '5.5': 'versiones', '5.6': 'idioma', '5.7': 'reintentos',
-  '5.8': 'navegadores', '5.9': 'singletons',
-  '6': 'query', '6.1': 'filtros', '6.2': 'orden', '6.3': 'campos', '6.4': 'paginacion', '6.5': 'recuento',
-  '7': 'writes', '7.1': 'idempotencia', '7.2': 'concurrencia', '7.3': 'respuesta-minima', '8': 'cache', '9': 'relations', '10': 'sync',
-  '11': 'extensiones', '11.1': 'actions', '11.2': 'batch', '11.3': 'filter-expr', '11.4': 'query-method', '11.5': 'oauth', '11.6': 'herencia',
+  '1.1': 'restep-versions', '1.2': 'dependencies', '3': 'data', '4.1': 'profile-header', '4.2': 'discovery', '4.3': 'describing', '4.4': 'health',
+  '5.1': 'resources', '5.2': 'collections', '5.3': 'reserved', '5.4': 'errors', '5.5': 'versions', '5.6': 'language', '5.7': 'retries',
+  '5.8': 'browser-clients', '5.9': 'singletons',
+  '6': 'query', '6.1': 'filters', '6.2': 'sorting', '6.3': 'fields', '6.4': 'pagination', '6.5': 'counts',
+  '7': 'writes', '7.1': 'idempotency', '7.2': 'concurrency', '7.3': 'minimal', '8': 'cache', '9': 'relations', '10': 'sync',
+  '11': 'extensions', '11.1': 'actions', '11.2': 'batch', '11.3': 'filter-expr', '11.4': 'query-method', '11.5': 'oauth', '11.6': 'inheritance',
 };
 export const sectionLink = (s) => `[§${s}](${SPEC}#${ANCHORS[s] ?? ''})`;
 
-// ── Carga ───────────────────────────────────────────────────────────────────
+// ── Loading ───────────────────────────────────────────────────────────────────
 
 export async function loadDocument(src) {
   let text;
   if (/^https?:\/\//i.test(src)) {
     let res;
     try { res = await fetch(src, { headers: { accept: 'application/json, application/yaml, text/yaml, */*' }, signal: AbortSignal.timeout(20000) }); }
-    catch (e) { throw new Error(`No se pudo descargar ${src}: ${e.cause?.message ?? e.message}`); }
-    if (!res.ok) throw new Error(`No se pudo descargar ${src}: respuesta ${res.status}.`);
+    catch (e) { throw new Error(`Could not download ${src}: ${e.cause?.message ?? e.message}`); }
+    if (!res.ok) throw new Error(`Could not download ${src}: status ${res.status}.`);
     text = await res.text();
   } else {
     try { text = await readFile(src, 'utf8'); }
-    catch (e) { throw new Error(e.code === 'ENOENT' ? `No existe el archivo ${src}.` : `No se pudo leer ${src}: ${e.message}`); }
+    catch (e) { throw new Error(e.code === 'ENOENT' ? `File ${src} does not exist.` : `Could not read ${src}: ${e.message}`); }
   }
   return parseDocument(text, src);
 }
 
-export function parseDocument(text, name = 'documento') {
+export function parseDocument(text, name = 'document') {
   const t = text.replace(/^﻿/, '').trimStart();
   let doc;
   if (t.startsWith('{')) {
-    try { doc = JSON.parse(t); } catch (e) { throw new Error(`${name} no es JSON válido: ${e.message}`); }
+    try { doc = JSON.parse(t); } catch (e) { throw new Error(`${name} is not valid JSON: ${e.message}`); }
   } else {
-    try { doc = parseYaml(t); } catch (e) { throw new Error(`${name} no se puede leer como YAML: ${e.message}`); }
+    try { doc = parseYaml(t); } catch (e) { throw new Error(`${name} cannot be read as YAML: ${e.message}`); }
   }
-  if (!isObject(doc)) throw new Error(`${name} no es un objeto OpenAPI.`);
-  if (doc.swagger) throw new Error(`${name} es Swagger ${doc.swagger}; esta herramienta lee OpenAPI 3. Conviértelo antes (por ejemplo con https://converter.swagger.io/ o «npx swagger2openapi»).`);
-  if (!/^3\.[0-2]/.test(String(doc.openapi ?? ''))) throw new Error(`${name} no declara «openapi: 3.x» (lleva ${JSON.stringify(doc.openapi ?? null)}).`);
-  if (!isObject(doc.paths) && !isObject(doc.webhooks)) throw new Error(`${name} no tiene «paths».`);
+  if (!isObject(doc)) throw new Error(`${name} is not an OpenAPI object.`);
+  if (doc.swagger) throw new Error(`${name} is Swagger ${doc.swagger}; this tool reads OpenAPI 3. Convert it first (for example with https://converter.swagger.io/ or "npx swagger2openapi").`);
+  if (!/^3\.[0-2]/.test(String(doc.openapi ?? ''))) throw new Error(`${name} does not declare "openapi: 3.x" (it has ${JSON.stringify(doc.openapi ?? null)}).`);
+  if (!isObject(doc.paths) && !isObject(doc.webhooks)) throw new Error(`${name} has no "paths".`);
   return doc;
 }
 
-// ── Utilidades ──────────────────────────────────────────────────────────────
+// ── Utilities ──────────────────────────────────────────────────────────────
 
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isParam = (seg) => /^\{[^}]+\}$/.test(seg);
@@ -84,7 +86,7 @@ const firstSentence = (s) => {
   const out = m ? m[1] : t;
   return out.length > 240 ? out.slice(0, 237) + '…' : out;
 };
-// Gramática de nombres (§3) y de rutas con punto; plantillas con variables simples y distintas (§4.2).
+// Name grammar (§3) and dotted paths; templates with simple, distinct variables (§4.2).
 const NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const FIELD_PATH_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}(\.[A-Za-z][A-Za-z0-9_-]{0,63})*$/;
 function templatePath(path) {
@@ -110,11 +112,11 @@ const VERBS = new Set(['activate', 'add', 'adopt', 'apply', 'approve', 'archive'
   'sign', 'start', 'stop', 'submit', 'subscribe', 'suspend', 'test', 'transfer', 'trigger', 'unarchive', 'unblock', 'unlock',
   'unpublish', 'unsubscribe', 'upload', 'validate', 'verify', 'void', 'search', 'query', 'find', 'count', 'bulk', 'batch']);
 const MONEY = /(price|amount|total|cost|balance|fee|subtotal|tax|vat|importe|precio|discount|payment|salary)/i;
-const RESERVED_FIX = 'filter, sort, fields, include, count, limit, cursor, since y languages significan lo que dice Restep (5.3): sort lleva campos con «-» para descendente, '
-  + 'count=true pide el total, limit es el tamaño de página, since es de sync y languages no se usa. Renombra el parámetro propio o dale el significado de Restep.';
+const RESERVED_FIX = 'filter, sort, fields, include, count, limit, cursor, since and languages mean what Restep says (5.3): sort takes fields with "-" for descending, '
+  + 'count=true asks for the total, limit is the page size, since belongs to sync and languages is not used. Rename your own parameter or give it the Restep meaning.';
 const RPC_PREFIX = /^(get|list|fetch|create|update|delete|remove|set|add|do|find|search)[A-Z_]/;
 
-// ── Análisis ────────────────────────────────────────────────────────────────
+// ── Analysis ────────────────────────────────────────────────────────────────
 
 export function analyze(doc, options = {}) {
   const ctx = new Context(doc, options);
@@ -129,10 +131,10 @@ class Context {
     this.findings = new Map();
     this.passes = [];
     this.unresolved = new Set();
-    this.allFields = new Map(); // nombre de campo → dónde
+    this.allFields = new Map(); // field name → where
   }
 
-  // Un hallazgo: se agrupan los del mismo id y los lugares se acumulan.
+  // A finding: those with the same id are grouped and the places accumulate.
   add(profile, id, severity, section, where, title, fix) {
     const key = id;
     let f = this.findings.get(key);
@@ -140,12 +142,12 @@ class Context {
     for (const w of [].concat(where)) if (w && !f.where.includes(w)) f.where.push(w);
   }
 
-  // Algo que ya cumple; se descarta al final si hay un hallazgo de alguno de los ids de `unless`.
+  // Something that already complies; dropped at the end if there is a finding for any of the ids in `unless`.
   pass(profile, section, text, unless = []) {
     if (!this.passes.some((p) => p.profile === profile && p.text === text)) this.passes.push({ profile, section, text, unless });
   }
 
-  // $ref locales (#/…). Los externos se anotan y se tratan como un esquema vacío.
+  // Local $refs (#/…). External ones are noted and treated as an empty schema.
   resolve(x, seen = new Set()) {
     while (isObject(x) && typeof x.$ref === 'string') {
       const ref = x.$ref;
@@ -169,7 +171,7 @@ class Context {
     return m ? decodeURIComponent(m[1]).replace(/~1/g, '/').replace(/~0/g, '~') : null;
   }
 
-  // Propiedades de un esquema de objeto, juntando allOf (y, con menos confianza, oneOf/anyOf).
+  // Properties of an object schema, merging allOf (and, with less confidence, oneOf/anyOf).
   props(schema, depth = 0) {
     const s = this.resolve(schema);
     const out = {};
@@ -192,7 +194,7 @@ class Context {
     return t ?? null;
   }
 
-  // El esquema JSON de una respuesta correcta, y su tipo de medio.
+  // The JSON schema of a successful response, and its media type.
   successSchema(op, codes = ['200', '201', '2XX', '2xx', 'default']) {
     const responses = op.responses ?? {};
     for (const code of codes) {
@@ -212,10 +214,10 @@ class Context {
 
   run() {
     const doc = this.doc;
-    this.title = doc.info?.title ?? 'API sin título';
+    this.title = doc.info?.title ?? 'Untitled API';
     this.apiVersion = doc.info?.version ?? null;
     this.openapi = String(doc.openapi);
-    // Los $ref externos no se siguen: se anotan todos para el informe.
+    // External $refs are not followed: all of them are noted for the report.
     const walk = (v, depth = 0) => {
       if (depth > 64 || v === null || typeof v !== 'object') return;
       if (typeof v.$ref === 'string' && !v.$ref.startsWith('#')) this.unresolved.add(v.$ref);
@@ -251,7 +253,7 @@ class Context {
     }
   }
 
-  // La raíz de la API: servers[0] más un prefijo común con la versión (/api/v1) si todas las rutas lo llevan.
+  // The API root: servers[0] plus a common version prefix (/api/v1) if every path carries it.
   findRoot() {
     const server = this.doc.servers?.[0];
     let url = server?.url ?? '/';
@@ -274,18 +276,18 @@ class Context {
     for (const o of this.ops) o.path = prefix ? o.rawPath.slice(prefix.length) || '/' : o.rawPath;
     const m = /\/v(\d+)([._-]\d+)*\/$/i.exec(this.root);
     this.majorVersion = m && !m[2] ? m[1] : null;
-    if (m && m[2]) this.add('core', 'core.version.path-format', 'warning', '5.5', `raíz ${this.root}`,
-      'La versión de la ruta no es «v» seguida de un entero.',
-      'Usa solo la versión mayor en la ruta (/v2/); las menores son cambios compatibles y no cambian la URL.');
-    else if (this.majorVersion) this.pass('core', '5.5', `La versión mayor va en la ruta (/v${this.majorVersion}/).`);
+    if (m && m[2]) this.add('core', 'core.version.path-format', 'warning', '5.5', `root ${this.root}`,
+      'The version in the path is not "v" followed by an integer.',
+      'Put only the major version in the path (/v2/); minor versions are compatible changes and do not change the URL.');
+    else if (this.majorVersion) this.pass('core', '5.5', `The major version is in the path (/v${this.majorVersion}/).`);
   }
 
-  // Clasifica cada ruta en colección, elemento, acción o recurso suelto.
+  // Classifies each path as collection, item, action or standalone resource.
   classifyPaths() {
     const byPath = new Map();
     for (const o of this.ops) { if (!byPath.has(o.path)) byPath.set(o.path, []); byPath.get(o.path).push(o); }
     this.byPath = byPath;
-    const collections = new Map(); // ruta de colección → colección
+    const collections = new Map(); // collection path → collection
     const ensure = (path) => {
       if (!collections.has(path)) collections.set(path, { path, ops: {}, itemPath: null, itemOps: {}, actions: [], children: [] });
       return collections.get(path);
@@ -323,7 +325,7 @@ class Context {
         for (const o of ops) c.ops[o.method] = o;
       } else for (const o of ops) others.push({ o });
     }
-    // Colecciones que solo existen por sus elementos se quedan; las acciones se cuelgan de su base.
+    // Collections that exist only through their items are kept; actions hang from their base.
     this.collections = [...collections.values()].sort((a, b) => a.path.localeCompare(b.path));
     for (const a of actions) {
       const segs = a.base.split('/').filter(Boolean);
@@ -333,7 +335,7 @@ class Context {
       if (c) c.actions.push({ ...a, on: onItem ? 'item' : 'collection' });
       else others.push({ o: a.o, action: a });
     }
-    // Subcolecciones: el padre es el elemento de otra colección.
+    // Subcollections: the parent is the item of another collection.
     for (const c of this.collections) {
       const segs = c.path.split('/').filter(Boolean);
       if (segs.length >= 2 && isParam(segs.at(-2))) {
@@ -341,7 +343,7 @@ class Context {
         if (parent) { c.parent = parent; parent.children.push(c); }
       }
     }
-    // Nombres: el último segmento; si se repite, con el del padre delante.
+    // Names: the last segment; if repeated, with the parent's in front.
     const used = new Map();
     for (const c of this.collections) {
       const last = c.path.split('/').filter(Boolean).at(-1) ?? 'root';
@@ -368,7 +370,7 @@ class Context {
     return false;
   }
 
-  // Forma de la respuesta de una lista: array suelto, envoltorio con array o un objeto sin más.
+  // Shape of a list response: bare array, wrapper with an array, or a plain object.
   listShape(schema) {
     const s = this.resolve(schema);
     const t = this.typeOf(s);
@@ -386,17 +388,17 @@ class Context {
       for (const p of o.params) {
         const n = lc(p.name ?? '');
         if (p.in === 'header' && /^(x-)?(api-)?version$|^accept-version$|^x-api-version$/.test(n))
-          this.add('core', 'core.version.header', 'error', '5.5', `${o.where} (cabecera ${p.name})`,
-            'La versión de la API va en una cabecera.', 'Restep pone la versión mayor en la ruta (/v2/), nunca en cabeceras, parámetros ni tipos de medio.');
+          this.add('core', 'core.version.header', 'error', '5.5', `${o.where} (header ${p.name})`,
+            'The API version is in a header.', 'Restep puts the major version in the path (/v2/), never in headers, parameters or media types.');
         if (p.in === 'query' && /^(api[-_]?)?version$|^v$/.test(n))
           this.add('core', 'core.version.query', 'error', '5.5', `${o.where}?${p.name}`,
-            'La versión de la API va en un parámetro de consulta.', 'Pon la versión mayor en la ruta (/v2/) y quita el parámetro.');
+            'The API version is in a query parameter.', 'Put the major version in the path (/v2/) and remove the parameter.');
       }
       for (const r of Object.values(o.op.responses ?? {})) {
         for (const media of Object.keys(this.resolve(r)?.content ?? {}))
           if (/vnd\.[^;]*(\.v\d+|version=)|;\s*version=/i.test(media))
             this.add('core', 'core.version.media', 'error', '5.5', `${o.where} (${media})`,
-              'La versión de la API va en el tipo de medio.', 'Usa application/json y pon la versión mayor en la ruta (/v2/).');
+              'The API version is in the media type.', 'Use application/json and put the major version in the path (/v2/).');
       }
     }
   }
@@ -405,12 +407,12 @@ class Context {
     const schemes = Object.entries(this.doc.components?.securitySchemes ?? {}).map(([k, v]) => [k, this.resolve(v)]);
     this.oauth = schemes.some(([, s]) => s?.type === 'oauth2' || s?.type === 'openIdConnect');
     if (this.oauth) this.add('extensions', 'oauth.metadata', 'info', '11.5', schemes.filter(([, s]) => s?.type === 'oauth2' || s?.type === 'openIdConnect').map(([k]) => `securitySchemes.${k}`),
-      'Usa OAuth 2.0: puede anunciar la extensión oauth.',
-      'Sirve los metadatos de recurso protegido (RFC 9728) en /.well-known/oauth-protected-resource/<raíz> y pon resource_metadata en el reto de los 401 de la raíz.');
+      'Uses OAuth 2.0: it can announce the oauth extension.',
+      'Serve the protected resource metadata (RFC 9728) at /.well-known/oauth-protected-resource/<root> and put resource_metadata in the challenge of the 401 responses at the root.');
     for (const [k, s] of schemes)
       if (s?.type === 'apiKey' && s.in === 'query')
         this.add('extensions', 'oauth.query-token', 'warning', '11.5', `securitySchemes.${k} (?${s.name})`,
-          'Las credenciales van en la query.', 'Mándalas en Authorization: una URL con el token acaba en registros y cachés (RFC 6750, 2.3).');
+          'Credentials go in the query.', 'Send them in Authorization: a URL with the token ends up in logs and caches (RFC 6750, 2.3).');
   }
 
   checkOperations() {
@@ -418,21 +420,21 @@ class Context {
     for (const o of this.ops) {
       const { method, op, where } = o;
       if (method === 'PUT') this.add('core', 'core.put', 'error', '5.1', where,
-        'Usa PUT para actualizar.', 'PUT queda fuera de Restep 1: ofrece PATCH con JSON Merge Patch (application/merge-patch+json), donde lo ausente no se toca.');
+        'Uses PUT to update.', 'PUT is outside Restep 1: offer PATCH with JSON Merge Patch (application/merge-patch+json), where absent members are left untouched.');
       if (method === 'PATCH') {
         const body = this.resolve(op.requestBody);
         const medias = Object.keys(body?.content ?? {}).map(lc);
-        if (medias.includes('application/merge-patch+json')) this.pass('core', '5.1', 'PATCH acepta application/merge-patch+json.', ['core.patch.json-patch', 'core.patch.media']);
+        if (medias.includes('application/merge-patch+json')) this.pass('core', '5.1', 'PATCH accepts application/merge-patch+json.', ['core.patch.json-patch', 'core.patch.media']);
         else if (medias.some((m) => m.includes('json-patch'))) this.add('core', 'core.patch.json-patch', 'error', '5.1', where,
-          'PATCH usa JSON Patch (RFC 6902) en vez de JSON Merge Patch.', 'Acepta application/merge-patch+json (RFC 7396): un objeto con los campos que cambian; null borra.');
+          'PATCH uses JSON Patch (RFC 6902) instead of JSON Merge Patch.', 'Accept application/merge-patch+json (RFC 7396): an object with the fields that change; null deletes.');
         else this.add('core', 'core.patch.media', 'warning', '5.1', where,
-          'PATCH no declara application/merge-patch+json.', 'Declara y acepta application/merge-patch+json; application/json con el mismo significado es opcional.');
+          'PATCH does not declare application/merge-patch+json.', 'Declare and accept application/merge-patch+json; application/json with the same meaning is optional.');
       }
-      // Errores
+      // Errors
       const responses = Object.entries(op.responses ?? {});
       const errs = responses.filter(([code]) => /^[45]/.test(code) || code === 'default');
       if (!errs.length) this.add('core', 'core.error.missing', 'info', '5.4', where,
-        'No declara respuestas de error.', 'Documenta al menos los 4xx que puede dar, con application/problem+json.');
+        'Declares no error responses.', 'Document at least the 4xx it can return, with application/problem+json.');
       for (const [code, r0] of errs) {
         anyErrors = true;
         const r = this.resolve(r0);
@@ -441,82 +443,85 @@ class Context {
         if (!medias.length) continue;
         const pj = medias.find((m) => lc(m) === 'application/problem+json');
         if (!pj) this.add('core', 'core.error.media', 'error', '5.4', `${where} → ${code} (${medias.join(', ')})`,
-          'Los errores no son application/problem+json.', 'Responde los 4xx y 5xx con application/problem+json (RFC 9457) y los miembros type, title, status y code.');
+          'Errors are not application/problem+json.', 'Answer 4xx and 5xx with application/problem+json (RFC 9457) and the members type, title, status and code.');
         else {
           problem = true;
           const props = this.props(content[pj].schema);
           if (Object.keys(props).length && !('code' in props))
             this.add('core', 'core.error.code', 'warning', '5.4', `${where} → ${code}`,
-              'El problem+json no tiene «code».', 'Añade code, con los valores de la tabla de 5.4 (not_found, invalid, conflict…).');
+              'The problem+json has no "code".', 'Add code, with the values from the table in 5.4 (not_found, invalid, conflict…).');
         }
       }
-      // Errores dentro de un 200
+      // Errors inside a 200
       const ok = this.successSchema(op, ['200']);
       if (ok?.schema) {
         const props = this.props(ok.schema);
         if (('success' in props && this.typeOf(props.success) === 'boolean') || ('ok' in props && this.typeOf(props.ok) === 'boolean') || ('error' in props && 'data' in props))
           this.add('core', 'core.error.in-200', 'warning', '5.4', where,
-            'La respuesta 200 lleva un indicador de éxito o error.', 'Un error nunca va en un 200: usa el estado HTTP y problem+json. Quita success/ok/error de los 200.');
+            'The 200 response carries a success or error flag.', 'An error never goes in a 200: use the HTTP status and problem+json. Remove success/ok/error from 200 responses.');
       }
-      if (op.deprecated === true) this.add('core', 'core.deprecated', 'info', '5.5', where, 'Algo está marcado como deprecated.',
-            'Restep lo anuncia en deprecations del descubrimiento (§5.5), con su kind (field, filter, method, collection…), announced (el instante en que se publicó el aviso, que no cambia) y sunset cuando haya fecha; las respuestas que lo usan llevan Deprecation y Link rel="deprecation". El borrador no lo declara: OpenAPI no dice cuándo se anunció.');
-      // Credenciales en la query, idempotencia, condicionales
+      if (op.deprecated === true) this.add('core', 'core.deprecated', 'info', '5.5', where, 'Something is marked deprecated.',
+            'Restep announces it in deprecations in the discovery document (§5.5), with its kind (field, filter, method, collection…), announced (the instant the notice was published, which does not change) and sunset when there is a date; responses that use it carry Deprecation and Link rel="deprecation". The draft does not declare it: OpenAPI does not say when it was announced.');
+      // Credentials in the query, idempotency, conditionals
       for (const p of o.params) {
         const n = lc(p.name ?? '');
-        if (p.deprecated === true) this.add('core', 'core.deprecated', 'info', '5.5', `${where}?${p.name}`, 'Algo está marcado como deprecated.',
-            'Restep lo anuncia en deprecations del descubrimiento (§5.5), con su kind (field, filter, method, collection…), announced (el instante en que se publicó el aviso, que no cambia) y sunset cuando haya fecha; las respuestas que lo usan llevan Deprecation y Link rel="deprecation". El borrador no lo declara: OpenAPI no dice cuándo se anunció.');
-        if (p.in === 'header' && n === 'idempotency-key') this.pass('writes', '7.1', 'Los POST aceptan Idempotency-Key.', ['writes.idempotency', 'writes.idempotency-name']);
+        if (p.deprecated === true) this.add('core', 'core.deprecated', 'info', '5.5', `${where}?${p.name}`, 'Something is marked deprecated.',
+            'Restep announces it in deprecations in the discovery document (§5.5), with its kind (field, filter, method, collection…), announced (the instant the notice was published, which does not change) and sunset when there is a date; responses that use it carry Deprecation and Link rel="deprecation". The draft does not declare it: OpenAPI does not say when it was announced.');
+        if (p.in === 'header' && n === 'idempotency-key') this.pass('writes', '7.1', 'POST requests accept Idempotency-Key.', ['writes.idempotency', 'writes.idempotency-name']);
         if (p.in === 'query' && n.startsWith('$')) this.add('core', 'core.reserved.dollar', 'error', '5.3', `${where}?${p.name}`,
-          'Usa parámetros que empiezan por «$» (estilo OData).', 'Los nombres con $ son de Restep. Pasa a filter[…], sort, fields y limit (6), o a nombres propios sin $.');
+          'Uses parameters that start with "$" (OData style).', 'Names with $ belong to Restep. Move to filter[…], sort, fields and limit (6), or to your own names without $.');
       }
       if (o.path.includes('//') || /\/$/.test(o.path) && o.path !== '/')
-        this.add('core', 'core.path.slash', 'warning', '5.1', where, 'La ruta acaba en «/».', 'La ruta de una colección o un elemento no lleva «/» final (5.1).');
+        this.add('core', 'core.path.slash', 'warning', '5.1', where, 'The path ends in "/".', 'The path of a collection or an item has no trailing "/" (5.1).');
     }
-    if (problem) this.pass('core', '5.4', 'Los errores van en application/problem+json.', ['core.error.media']);
+    if (problem) this.pass('core', '5.4', 'Errors use application/problem+json.', ['core.error.media']);
     this.anyErrors = anyErrors;
-    // Rutas que no son colecciones ni elementos
+    // Paths that are neither collections nor items
     const loose = new Map();
     for (const x of this.others) {
       if (x.root) continue;
       if (x.rpc && x.o.method === 'GET' && /^(find|search|list|get|fetch)/i.test(x.o.path.split('/').at(-1)) && x.o.path.split('/').filter(Boolean).length > 1)
-        this.add('query', 'query.search-path', 'warning', '6.1', x.o.where, 'Una búsqueda tiene su propia ruta.',
-          'Filtra sobre la propia colección: GET /pets?filter[status]=sold en vez de GET /pets/findByStatus?status=sold, con los filtros declarados en el descubrimiento.');
+        this.add('query', 'query.search-path', 'warning', '6.1', x.o.where, 'A search has its own path.',
+          'Filter on the collection itself: GET /pets?filter[status]=sold instead of GET /pets/findByStatus?status=sold, with the filters declared in the discovery document.');
       else if (x.rpc) this.add('core', 'core.rpc-path', 'warning', '5.1', x.o.where,
-        'La ruta es un nombre de procedimiento (estilo RPC).', 'Organiza la API en colecciones y elementos (/users, /users/7) con GET, POST, PATCH y DELETE; lo demás, como acciones (11.1).');
+        'The path is a procedure name (RPC style).', 'Organize the API into collections and items (/users, /users/7) with GET, POST, PATCH and DELETE; everything else as actions (11.1).');
       else if (x.action) this.add('extensions', 'actions.verb-path', 'warning', '11.1', x.o.where,
-        'Un verbo en la URL hace de acción.', `Decláralo como acción: ${x.o.method === 'GET' ? 'GET' : 'POST'} ${this.prefix}${x.action.base}:${snake(x.action.name)}.`);
+        'A verb in the URL acts as an action.', `Declare it as an action: ${x.o.method === 'GET' ? 'GET' : 'POST'} ${this.prefix}${x.action.base}:${snake(x.action.name)}.`);
       else if (/^\/?(health|healthz|status|ping|livez|readyz)$/i.test(x.o.path.replace(/^\//, ''))) this.statusPath = x.o.rawPath;
       else { if (!loose.has(x.o.path)) loose.set(x.o.path, []); loose.get(x.o.path).push(x.o); }
     }
     this.findSingletons(loose);
   }
 
-  // §5.9 (borrador 6): un recurso suelto que es un único objeto (/me, /settings) se declara como
-  // singleton si su ruta no es una plantilla ni una que una colección o un elemento tenga o pueda
-  // tener, admite GET y, como mucho, PATCH (un PUT pasa a PATCH). Los demás quedan fuera de Restep.
+  // §5.9 (draft 6): a standalone resource that is a single object (/me, /settings) is declared as
+  // a singleton if its path is not a template nor one that a collection or an item has or could
+  // have, it allows GET and, at most, PATCH (a PUT becomes PATCH). The rest stay outside Restep.
   findSingletons(loose) {
     this.singletons = [];
     for (const [path, ops] of loose) {
       const methods = new Set(ops.map((o) => o.method));
       const get = ops.find((o) => o.method === 'GET');
-      const ok = get && [...methods].every((m) => ['GET', 'HEAD', 'PATCH', 'PUT'].includes(m)) && !path.split('/').some(isParam)
-        && !this.collections.some((c) => path.startsWith(c.path + '/') || path === c.path);
+      // §5.9 (draft 7): a singleton may hang from an item: its path is the item path followed by literal segments.
+      const parent = this.collections.find((c) => c.itemPath && path.startsWith(c.itemPath + '/') && !path.slice(c.itemPath.length + 1).split('/').some(isParam));
+      const ok = get && [...methods].every((m) => ['GET', 'HEAD', 'PATCH', 'PUT'].includes(m))
+        && (parent ? !this.collections.some((c) => c.path === path || path.startsWith(c.path + '/') && c !== parent && c.path.length > parent.itemPath.length)
+          : !path.split('/').some(isParam) && !this.collections.some((c) => path.startsWith(c.path + '/') || path === c.path));
       const shape = get && this.successSchema(get.op);
       const objectLike = !shape?.schema || this.listShape(shape.schema).kind === 'object';
       if (!ok || !objectLike) {
-        for (const o of ops) this.add('core', 'core.non-resource', 'info', '5.9', o.where, 'Recurso que no es colección, elemento ni singleton.',
-          'Queda fuera de Restep (§5.9): solo le aplican 5.3, 5.4 y la regla de Cache-Control de 5.1, y no entra en el descubrimiento. Si es un único objeto con GET y PATCH, '
-          + 'como /me o /settings, puede declararse como singleton; si crea o borra cosas, valora una colección o una acción.');
+        for (const o of ops) this.add('core', 'core.non-resource', 'info', '5.9', o.where, 'Resource that is not a collection, item or singleton.',
+          'It is outside Restep (§5.9): only 5.3, 5.4 and the Cache-Control rule of 5.1 apply to it, and it is not in the discovery document. If it is a single object with GET and PATCH, '
+          + 'like /me or /settings, it can be declared as a singleton; if it creates or deletes things, consider a collection or an action.');
         continue;
       }
       const segs = path.split('/').filter(Boolean);
-      let name = snake(segs.at(-1)) || 'recurso';
+      let name = snake(segs.at(-1)) || 'resource';
       if (this.singletons.some((x) => x.name === name)) name = snake(segs.join('_')) || name;
-      this.singletons.push({ name, path, ops: Object.fromEntries(ops.map((o) => [o.method, o])) });
-      this.add('core', 'core.singleton', 'info', '5.9', ops.map((o) => o.where), 'Recurso suelto que el borrador declara como singleton.',
-        'Un singleton admite GET (y HEAD) y, si acaso, PATCH con merge patch; POST y DELETE le dan 405. Sus relaciones llevan href, y include y los demás parámetros reservados que no implementa dan unsupported_parameter (§5.9).');
+      this.singletons.push({ name, path, parent, ops: Object.fromEntries(ops.map((o) => [o.method, o])) });
+      this.add('core', 'core.singleton', 'info', '5.9', ops.map((o) => o.where), 'Standalone resource that the draft declares as a singleton.',
+        'A singleton allows GET (and HEAD) and, at most, PATCH with merge patch; POST and DELETE get 405. Its relations carry href, and include and the other reserved parameters it does not implement give unsupported_parameter (§5.9).');
     }
-    if (this.singletons.length) this.pass('core', '5.9', 'Los recursos de un solo objeto se pueden declarar como singletons.');
+    if (this.singletons.length) this.pass('core', '5.9', 'Single-object resources can be declared as singletons.');
   }
 
   checkCollections() {
@@ -524,28 +529,28 @@ class Context {
     this.hasWrites = writes;
     for (const c of this.collections) {
       const get = c.ops.GET;
-      // Forma de la lista (§5.2)
+      // List shape (§5.2)
       if (get) {
         const s = this.successSchema(get.op);
         const shape = s?.schema ? this.listShape(s.schema) : null;
         c.shape = shape;
-        if (!shape) this.add('core', 'core.list.unknown', 'info', '5.2', get.where, 'No se ve la forma de la respuesta de la lista.', 'Documenta el esquema: un objeto con items y next.');
+        if (!shape) this.add('core', 'core.list.unknown', 'info', '5.2', get.where, 'The shape of the list response is not visible.', 'Document the schema: an object with items and next.');
         else if (shape.kind === 'array') this.add('core', 'core.list.array', 'error', '5.2', get.where,
-          'La lista responde con un array suelto.', 'Responde con un objeto { "items": [...], "next": null }: así se puede paginar más tarde sin romper a nadie.');
+          'The list responds with a bare array.', 'Respond with an object { "items": [...], "next": null }: that way pagination can be added later without breaking anyone.');
         else if (shape.kind === 'envelope') {
           if (shape.key !== 'items') this.add('core', 'core.list.envelope', 'error', '5.2', `${get.where} (${shape.key})`,
-            'La lista no lleva los elementos en «items».', `Renombra «${shape.key}» a «items».`);
-          else this.pass('core', '5.2', 'Las listas llevan los elementos en «items».', ['core.list.envelope', 'core.list.array']);
+            'The list does not carry its items in "items".', `Rename "${shape.key}" to "items".`);
+          else this.pass('core', '5.2', 'Lists carry their items in "items".', ['core.list.envelope', 'core.list.array']);
           const p = shape.props;
-          if ('next' in p) this.pass('core', '5.2', 'Las listas llevan «next».', ['core.list.next', 'core.list.array']);
+          if ('next' in p) this.pass('core', '5.2', 'Lists carry "next".', ['core.list.next', 'core.list.array']);
           else {
             const alt = Object.keys(p).find((k) => /^(next_?(cursor|page|token|link|url)?|nextpagetoken|cursor|links|_links|pagination|meta|paging)$/i.test(k));
             this.add('core', 'core.list.next', 'error', '5.2', `${get.where}${alt ? ` (${alt})` : ''}`,
-              'La lista no lleva «next».', 'Añade next, siempre presente: la URL de la página siguiente (con su cursor) o null.');
+              'The list has no "next".', 'Add next, always present: the URL of the next page (with its cursor) or null.');
           }
           if (['page', 'total_pages', 'totalpages', 'page_count', 'pagecount', 'offset'].some((k) => Object.keys(p).map(lc).includes(k)))
-            this.add('query', 'query.pagination.offset', 'error', '6.4', `${get.where} (respuesta)`, 'Pagina por desplazamiento o número de página.',
-              'Pagina con un cursor opaco que viaja en next (6.4); el servidor puede guardar un desplazamiento dentro del cursor.');
+            this.add('query', 'query.pagination.offset', 'error', '6.4', `${get.where} (response)`, 'Paginates by offset or page number.',
+              'Paginate with an opaque cursor carried in next (6.4); the server can keep an offset inside the cursor.');
           const total = Object.keys(p).find((k) => /^(total|total_?count|count|total_?items|total_?results)$/i.test(k));
           if (total) c.countField = total;
         }
@@ -557,38 +562,38 @@ class Context {
         const codes = Object.keys(post.op.responses ?? {});
         if (codes.includes('201')) {
           const h = this.headersOf(post.op.responses['201']);
-          if (!h.location) this.add('core', 'core.post.location', 'warning', '5.1', post.where, 'El 201 no declara Location.', 'Un POST que crea responde 201 con Location y la representación del elemento.');
-          else this.pass('core', '5.1', 'Los POST que crean responden 201 con Location.', ['core.post.status', 'core.post.location']);
-        } else this.add('core', 'core.post.status', 'warning', '5.1', `${post.where} (${codes.join(', ')})`, 'Crear no responde 201.', 'Responde 201 con Location y la representación del elemento creado.');
+          if (!h.location) this.add('core', 'core.post.location', 'warning', '5.1', post.where, 'The 201 does not declare Location.', 'A POST that creates responds 201 with Location and the representation of the item.');
+          else this.pass('core', '5.1', 'POST requests that create respond 201 with Location.', ['core.post.status', 'core.post.location']);
+        } else this.add('core', 'core.post.status', 'warning', '5.1', `${post.where} (${codes.join(', ')})`, 'Creating does not respond 201.', 'Respond 201 with Location and the representation of the created item.');
         const body = this.resolve(post.op.requestBody)?.content;
         const bm = body && Object.keys(body).find(isJsonMedia);
         const bodyProps = bm ? this.props(body[bm].schema) : {};
-        // §5.1 (borrador 6): el cliente puede elegir el id si la colección lo declara en id_from.
+        // §5.1 (draft 6): the client may choose the id if the collection declares it in id_from.
         if ('id' in bodyProps && !this.resolve(bodyProps.id)?.readOnly) {
           c.idFrom = this.requiredOf(body[bm].schema).includes('id') ? 'client' : 'either';
-          this.add('core', 'core.post.id', 'info', '5.1', `${post.where} (${this.refName(body[bm].schema) ? `esquema ${this.refName(body[bm].schema)}` : 'cuerpo'} → id_from ${c.idFrom})`,
-            'El cuerpo de creación admite id: el cliente elige el id.',
-            'El borrador lo declara con id_from ("client" si el id es obligatorio, "either" si no). Entonces el servidor valida el id (422 con type o format), '
-            + 'responde 409 con una entrada taken a un id que la colección tiene o ha tenido, y conviene exigir un formato difícil de adivinar, como un UUID (§13.6). '
-            + 'Si en realidad lo asigna el servidor, quítalo del cuerpo o márcalo readOnly: un POST con id da 422 con read_only.');
+          this.add('core', 'core.post.id', 'info', '5.1', `${post.where} (${this.refName(body[bm].schema) ? `schema ${this.refName(body[bm].schema)}` : 'body'} → id_from ${c.idFrom})`,
+            'The create body accepts id: the client chooses the id.',
+            'The draft declares it with id_from ("client" if the id is required, "either" if not). The server then validates the id (422 with type or format), '
+            + 'responds 409 with a taken entry to an id the collection has or has had, and should require a hard-to-guess format, such as a UUID (§13.6). '
+            + 'If the server actually assigns it, remove it from the body or mark it readOnly: a POST with id gets 422 with read_only.');
         }
-        // §3: el cuerpo de un POST a una colección va en application/json; otro tipo da 415.
-        this.checkJsonBody(post);
+        // §3: the body of a POST to a collection is application/json; another type gives 415.
+        this.checkJsonBody(post, c);
         const h = post.params.find((p) => p.in === 'header' && /idempoten/i.test(p.name));
-        if (!h) this.add('writes', 'writes.idempotency', 'warning', '7.1', post.where, 'Los POST no aceptan Idempotency-Key.',
-          'Acepta Idempotency-Key (una cadena de Structured Fields) y devuelve la misma respuesta al repetir la petición.');
+        if (!h) this.add('writes', 'writes.idempotency', 'warning', '7.1', post.where, 'POST requests do not accept Idempotency-Key.',
+          'Accept Idempotency-Key (a Structured Fields string) and return the same response when the request is repeated.');
         else if (lc(h.name) !== 'idempotency-key') this.add('writes', 'writes.idempotency-name', 'warning', '7.1', `${post.where} (${h.name})`,
-          'La clave de idempotencia no se llama Idempotency-Key.', 'Usa la cabecera Idempotency-Key, la del borrador del IETF.');
+          'The idempotency key is not called Idempotency-Key.', 'Use the Idempotency-Key header, the one from the IETF draft.');
       }
-      // Elemento
+      // Item
       const iget = c.itemOps.GET;
       if (iget) {
         const s = this.successSchema(iget.op, ['200']);
         const h = s ? this.headersOf(s.response) : {};
         c.itemSchema = s?.schema;
-        if (h.etag) this.pass('writes', '7.2', 'El GET de un elemento declara ETag.', ['writes.etag']);
-        else if (writes) this.add('writes', 'writes.etag', 'error', '7.2', iget.where, 'El GET del elemento no declara ETag.',
-          'Devuelve una ETag fuerte de la representación completa; es lo que permite If-Match.');
+        if (h.etag) this.pass('writes', '7.2', 'The GET of an item declares ETag.', ['writes.etag']);
+        else if (writes) this.add('writes', 'writes.etag', 'error', '7.2', iget.where, 'The item GET does not declare ETag.',
+          'Return a strong ETag of the full representation; it is what makes If-Match possible.');
         this.checkCacheControl(h, iget.where);
         if (!h.etag) this.cacheMissing = true;
       }
@@ -597,17 +602,17 @@ class Context {
         const o = c.itemOps[m];
         if (!o) continue;
         const ifMatch = o.params.some((p) => p.in === 'header' && lc(p.name) === 'if-match') || '412' in (o.op.responses ?? {});
-        if (ifMatch) this.pass('writes', '7.2', 'Las escrituras aceptan If-Match.', ['writes.if-match']);
-        else this.add('writes', 'writes.if-match', 'warning', '7.2', o.where, 'Las escrituras no aceptan If-Match.',
-          'Evalúa If-Match contra la ETag del elemento en PATCH y DELETE, y responde 412 precondition_failed si no coincide.');
+        if (ifMatch) this.pass('writes', '7.2', 'Writes accept If-Match.', ['writes.if-match']);
+        else this.add('writes', 'writes.if-match', 'warning', '7.2', o.where, 'Writes do not accept If-Match.',
+          'Evaluate If-Match against the ETag of the item in PATCH and DELETE, and respond 412 precondition_failed if it does not match.');
       }
-      if (c.itemOps.POST) this.add('core', 'core.item-post', 'warning', '5.1', c.itemOps.POST.where, 'Un POST sobre un elemento.',
-        'Para cambiar un elemento, PATCH con JSON Merge Patch; para una operación que no es actualizar, una acción declarada (POST /pets/{id}:nombre).');
+      if (c.itemOps.POST) this.add('core', 'core.item-post', 'warning', '5.1', c.itemOps.POST.where, 'A POST on an item.',
+        'To change an item, PATCH with JSON Merge Patch; for an operation that is not an update, a declared action (POST /pets/{id}:name).');
       const del = c.itemOps.DELETE;
       if (del) {
         const codes = Object.keys(del.op.responses ?? {});
-        if (!codes.includes('204')) this.add('core', 'core.delete.status', 'warning', '5.1', `${del.where} (${codes.filter((k) => /^2/.test(k)).join(', ') || 'sin 2xx'})`,
-          'Borrar no responde 204.', 'DELETE responde 204 sin cuerpo.');
+        if (!codes.includes('204')) this.add('core', 'core.delete.status', 'warning', '5.1', `${del.where} (${codes.filter((k) => /^2/.test(k)).join(', ') || 'no 2xx'})`,
+          'Deleting does not respond 204.', 'DELETE responds 204 with no body.');
       }
       c.itemSchema ??= c.listItemSchema ?? (post && this.successSchema(post.op, ['201'])?.schema);
       if (c.itemPath) {
@@ -615,59 +620,118 @@ class Context {
         const pp = c.itemOps.GET?.params.find((p) => p.in === 'path' && p.name === pname) ?? Object.values(c.itemOps)[0]?.params.find((p) => p.in === 'path' && p.name === pname);
         const t = pp ? this.typeOf(pp.schema) : null;
         if (t === 'integer' || t === 'number') this.add('core', 'data.id.type', 'error', '3', `${c.itemPath} ({${pname}}: ${t})`,
-          'El identificador es un número.', 'El id es una cadena ("7"), siempre: así se puede cambiar de generador de ids sin romper a los clientes.');
+          'The identifier is a number.', 'The id is always a string ("7"): that way the id generator can change without breaking clients.');
       }
       this.checkQueryParams(c);
-      // Acciones
+      // Actions
       for (const a of c.actions) {
-        if (a.style === 'colon') this.pass('extensions', '11.1', 'Las acciones usan la forma con dos puntos (/orders/{id}:cancel).');
+        if (a.style === 'colon') this.pass('extensions', '11.1', 'Actions use the colon form (/orders/{id}:cancel).');
         else this.add('extensions', 'actions.verb-path', 'warning', '11.1', a.o.where,
-          'Un verbo en la URL hace de acción.', 'Decláralo como acción con dos puntos: POST /orders/{id}:cancel en vez de POST /orders/{id}/cancel.');
+          'A verb in the URL acts as an action.', 'Declare it as an action with a colon: POST /orders/{id}:cancel instead of POST /orders/{id}/cancel.');
         if (a.o.method === 'POST') this.checkJsonBody(a.o);
         if (lc(a.name) === 'search' && a.o.method === 'POST') this.add('extensions', 'query-method.search', 'info', '11.4', a.o.where,
-          'Una búsqueda por POST.', 'Si es para consultas que no caben en la URL, Restep tiene QUERY (extensión query-method) con los mismos filtros que GET; si no, usa GET con filter[…].');
+          'A search via POST.', 'If it is for queries that do not fit in the URL, Restep has QUERY (the query-method extension) with the same filters as GET; otherwise, use GET with filter[…].');
       }
-      if (c.ops.QUERY) this.pass('extensions', '11.4', 'Usa el método QUERY.');
+      if (c.ops.QUERY) this.pass('extensions', '11.4', 'Uses the QUERY method.');
     }
-    // Lotes
+    // Batches
     for (const o of this.ops) if (/\/(batch|bulk)(\/|$|:)/i.test(o.path) || /:(batch|bulk)\w*$/i.test(o.path))
-      this.add('extensions', 'batch.bulk', 'info', '11.2', o.where, 'Hay operaciones por lotes.',
-        'Restep tiene la extensión batch: un único POST con operaciones en orden, referencias entre ellas y modo atómico.');
-    if (!this.collections.length) this.add('core', 'core.no-collections', 'error', '5.2', 'todo el documento',
-      'No se reconoce ninguna colección.', 'Restep organiza la API en colecciones (/books) y elementos (/books/7).');
+      this.add('extensions', 'batch.bulk', 'info', '11.2', o.where, 'There are batch operations.',
+        'Restep has the batch extension: a single POST with ordered operations, references between them and an atomic mode.');
+    if (!this.collections.length) this.add('core', 'core.no-collections', 'error', '5.2', 'whole document',
+      'No collection is recognized.', 'Restep organizes the API into collections (/books) and items (/books/7).');
   }
 
-  // Los required de un esquema de objeto, juntando allOf.
+  // The required of an object schema, merging allOf.
   requiredOf(schema, depth = 0) {
     const s = this.resolve(schema);
     if (!isObject(s) || depth > 8) return [];
     return [...(Array.isArray(s.required) ? s.required : []), ...(s.allOf ?? []).flatMap((x) => this.requiredOf(x, depth + 1))];
   }
 
-  // §3 (borrador 6): una petición con cuerpo a un recurso de Restep (POST a una colección o a una
-  // acción) lleva Content-Type: application/json; cualquier otro tipo, o ninguno, da 415.
-  checkJsonBody(o) {
+  // §3 (draft 6): a request with a body to a Restep resource (POST to a collection or to an
+  // action) carries Content-Type: application/json; any other type, or none, gives 415.
+  checkJsonBody(o, c = null) {
     const body = this.resolve(o.op.requestBody);
     const medias = Object.keys(body?.content ?? {});
+    // §5.1 (draft 7): a POST to a collection that carries the bytes of a file is an upload: the collection
+    // declares upload with those media types, and multipart/form-data with one binary part, named file, as
+    // "multipart": true. Council, round 4: only application/json creates an item from JSON (1b), so a +json type
+    // (application/ld+json) is a file like any other, and */* is a media range that admits every type (2).
+    if (c) {
+      const types = [], suffixed = [], at = (m) => this.resolve(body.content[m]?.schema);
+      const range = (t) => t === '*/*' || /^[a-z0-9][a-z0-9!#$&^_.+-]*\/(\*|[a-z0-9][a-z0-9!#$&^_.+-]*)$/.test(t);
+      let multipart = false;
+      for (const m of medias) {
+        const t = lc(m).split(';')[0].trim();
+        if (t === 'application/json' || t === 'application/x-www-form-urlencoded') continue;
+        if (t === 'multipart/form-data') {
+          const props = this.props(at(m));
+          const file = this.resolve(props.file);
+          if (Object.keys(props).length === 1 && file && (file.format === 'binary' || file.contentMediaType)) {
+            multipart = true;
+            const enc = body.content[m].encoding?.file?.contentType;
+            for (const x of String(enc ?? file.contentMediaType ?? 'application/octet-stream').split(',')) {
+              const y = lc(x.split(';')[0].trim());
+              if (range(y)) types.push(y);
+            }
+          }
+          continue;
+        }
+        if (range(t)) { types.push(t); if (t.endsWith('+json')) suffixed.push(t); }
+      }
+      // A +json body that the OpenAPI document describes as an object most likely creates an item: in Restep it is a file.
+      if (suffixed.length)
+        this.add('core', 'core.upload.json-suffix', 'warning', '5.1', `${o.where} (${suffixed.join(', ')})`, 'The POST takes a +json media type.',
+          'Only a request whose own Content-Type is application/json creates an item from JSON (§5.1); any other type, a +json one included, is the bytes of a file. '
+          + 'The draft declares it in upload; if the body creates an item, the client sends it as application/json instead.');
+      if (types.length) {
+        // §5.1 (council, round 3, decisions 1 and 2): schemas.create announces creation from JSON, so the collection
+        // declares it if and only if the POST also takes JSON. Then a JSON POST always creates an item, and a JSON file
+        // (application/json, also by application/* or */*) only travels as the file part of multipart/form-data, which
+        // the collection declares with "multipart": true.
+        const acceptsJson = medias.some((m) => lc(m).split(';')[0].trim() === 'application/json');
+        const jsonFiles = types.some((t) => t === 'application/json' || t === 'application/*' || t === '*/*');
+        c.createsFromJson = acceptsJson;
+        if (acceptsJson && jsonFiles && !multipart) {
+          multipart = true;
+          this.add('core', 'core.upload.json-file', 'warning', '5.1', o.where, 'The collection takes JSON files and creates items from JSON.',
+            'A POST with application/json to it always creates an item from its fields, never a file: a JSON file only travels as the file part of multipart/form-data, '
+            + 'so the collection declares "multipart": true (§5.1). OpenAPI does not describe that multipart body; the draft declares it, and the server has to accept it.');
+        }
+        c.upload = { media_types: [...new Set(types)], ...(multipart && { multipart: true }) };
+        this.add('core', 'core.upload', 'info', '5.1', `${o.where} (${medias.join(', ')})`, 'The POST carries the bytes of a file.',
+          'Restep declares it with upload on the collection (§5.1): the media types it takes (415 to any other), max_size (413 content_too_large above it) and, for multipart/form-data with one part named file, "multipart": true. '
+          + 'The item it creates carries _content with href, media_type and size. The draft declares upload; add max_size by hand.');
+        // §5.1 (council, decision 2; round 4, 1a): a collection that does not create items from JSON answers a JSON
+        // body with 415, unless its media_types admit application/json, also by a wildcard: then that body is a file.
+        if (!acceptsJson && !jsonFiles)
+          this.add('core', 'core.upload.only', 'info', '5.1', o.where, 'The collection only takes files, not JSON.',
+            'A POST with a JSON body to it gets 415 unsupported_media_type, not 422, and that 415 SHOULD carry Accept-Post with the media types it takes (§5.1); '
+            + 'a browser client needs Accept-Post in Access-Control-Expose-Headers (§5.8).');
+        return;
+      }
+    }
     if (!medias.length || medias.some((m) => lc(m).split(';')[0].trim() === 'application/json')) return;
-    this.add('core', 'core.request.media', 'error', '3', `${o.where} (${medias.join(', ')})`, 'El cuerpo de la petición no es application/json.',
-      'Un POST a una colección o a una acción lleva Content-Type: application/json, y el servidor responde 415 unsupported_media_type a cualquier otro tipo (también formularios y multipart) o a un cuerpo sin él. '
-      + 'Un archivo binario es un recurso fuera de Restep (§5.9).');
+    this.add('core', 'core.request.media', 'error', '3', `${o.where} (${medias.join(', ')})`, 'The request body is not application/json.',
+      'A POST to a collection or an action carries Content-Type: application/json, and the server responds 415 unsupported_media_type to any other type (forms and multipart included) or to a body without it. '
+      + 'A file is uploaded to a collection that declares upload (§5.1).');
   }
 
-  // Perfil cache (§8): toda lectura lleva Cache-Control explícito, y el GET de un elemento, ETag.
-  // Desde el borrador 6 es un perfil aparte de writes. Que una respuesta que depende de las
-  // credenciales lleve private o no-store lo pide §5.1 a todo servidor, pero OpenAPI no deja ver
-  // el valor de la cabecera.
+
+  // Cache profile (§8): every read carries an explicit Cache-Control, and an item GET, ETag.
+  // Since draft 6 it is a profile apart from writes. That a response that depends on the
+  // credentials carries private or no-store is required of every server by §5.1, but OpenAPI does not show
+  // the header value.
   checkCacheControl(h, where) {
-    if (h['cache-control']) { this.cacheHint = true; this.pass('cache', '8', 'Las lecturas documentan Cache-Control.', ['cache.cache-control']); return; }
+    if (h['cache-control']) { this.cacheHint = true; this.pass('cache', '8', 'Reads document Cache-Control.', ['cache.cache-control']); return; }
     this.cacheMissing = true;
-    this.add('cache', 'cache.cache-control', 'info', '8', where, 'No se documenta Cache-Control en las lecturas.',
-      'Con el perfil cache, toda respuesta a GET o HEAD, también los errores, lleva Cache-Control explícito, y el GET de un elemento, ETag. '
-      + 'Anuncies cache o no, una respuesta que depende de las credenciales lleva private o no-store (§5.1).');
+    this.add('cache', 'cache.cache-control', 'info', '8', where, 'Reads do not document Cache-Control.',
+      'With the cache profile, every response to GET or HEAD, errors included, carries an explicit Cache-Control, and the GET of an item an ETag. '
+      + 'Whether or not you announce cache, a response that depends on credentials carries private or no-store (§5.1).');
   }
 
-  // Parámetros de consulta de la lista (§5.3, §6) y lo que se puede inferir para el descubrimiento.
+  // Query parameters of the list (§5.3, §6) and what can be inferred for discovery.
   checkQueryParams(c) {
     const get = c.ops.GET;
     c.filters = {};
@@ -682,9 +746,9 @@ class Context {
       return fieldNames.find((f) => cands.includes(f)) ?? fieldNames.find((f) => lc(f) === lc(base) || words(f) === words(base)) ?? null;
     };
     c.namedFilters = {};
-    // §6.1 (borrador 6): un campo cuyo valor es una lista no se declara en filter (si significa «algún
-    // elemento» o «todos» queda para una versión menor). Un parámetro sobre él pasa a ser un filtro
-    // con nombre, cuya descripción dice qué devuelve; uno con punto que atraviesa la lista se descarta.
+    // §6.1 (draft 6): a field whose value is a list is not declared in filter (whether it means "some
+    // element" or "all" is left for a minor version). A parameter on it becomes a named filter,
+    // whose description says what it returns; a dotted one that crosses the list is dropped.
     const listPath = (field) => this.typeOf(itemProps[field.split('.')[0]]) === 'array';
     const addNamed = (field, schema, source, why) => {
       const itemSchema = this.typeOf(schema) === 'array' ? this.resolve(schema).items : schema;
@@ -696,14 +760,31 @@ class Context {
     const addFilter = (field, op, schema, confidence, source) => {
       if (listPath(field)) {
         if (field.includes('.')) {
-          this.add('query', 'query.filter.list', 'warning', '6.1', `${source} → ${field}`, 'Un filtro atraviesa un campo que es una lista.',
-            'Restep 1 no declara en filter ni en sort un campo que es una lista ni una ruta que pase por una relación a muchos (§6.1). Para ese criterio, declara un filtro con nombre (named_filters) con una descripción de qué elementos devuelve.');
+          this.add('query', 'query.filter.list', 'warning', '6.1', `${source} → ${field}`, 'A filter goes through a field that is a list.',
+            'Restep 1 does not declare in filter or sort a field that is a list, nor a path that goes through a to-many relation (§6.1). For that criterion, declare a named filter (named_filters) with a description of which items it returns.');
           return 'dropped';
         }
-        addNamed(field, schema, source, `Elementos cuyo campo ${field}, una lista, contiene el valor (deducido de ${source.split('?').pop()}: revisa el criterio).`);
-        this.add('query', 'query.filter.list', 'warning', '6.1', `${source} → filter[${field}]`, 'Un filtro sobre un campo que es una lista.',
-          'Restep 1 no declara en filter un campo cuyo valor es una lista (§6.1). El borrador lo declara como filtro con nombre (named_filters), que se usa con filter[campo]=valor sin operadores y cuyo significado lo da su descripción.');
-        return 'named';
+        // §6.1 (draft 7): a field whose value is a list of scalars is declared with "quantifier": "some" and the
+        // type of its elements: an item matches when some element does. Never with ne or nin.
+        const listItems = this.resolve(itemProps[field])?.items;
+        const elem = listItems ?? (this.typeOf(schema) === 'array' ? this.resolve(schema).items : schema);
+        const qop = op === 'in' || (this.typeOf(schema) === 'array' && op !== 'null') ? 'in' : op;
+        // §6.1 (council, decision 1): null on a list of objects, which is kept only if it is a to-many relation,
+        // is declared with the type of the related items' id, string, and without quantifier.
+        if (this.typeOf(elem) === 'object' || this.typeOf(elem) === 'array') {
+          if (qop !== 'null') return 'dropped';
+          const f = (c.filters[field] ??= { ops: [], schema: { type: 'string' }, relationNull: true, confidence: 'low', sources: [] });
+          if (!f.ops.includes('null')) f.ops.push('null');
+          f.sources.push(source);
+          return 'quantifier';
+        }
+        const f = (c.filters[field] ??= { ops: [], schema: elem, elem, quantifier: 'some', confidence: 'low', sources: [] });
+        if (!['ne', 'nin'].includes(qop) && !f.ops.includes(qop)) f.ops.push(qop);
+        f.sources.push(source);
+        this.add('query', 'query.filter.list', 'info', '6.1', `${source} → filter[${field}]`, 'A filter on a field that is a list.',
+          'Restep 1 declares it in filter with "quantifier": "some" and the type of its elements (§6.1): an item matches when some element matches. The draft declares it so; check that the API means "some element". '
+          + 'With null as its only operator (an empty list is null) it carries no quantifier.');
+        return 'quantifier';
       }
       const fname = field;
       const f = (c.filters[fname] ??= { ops: [], schema, confidence, sources: [] });
@@ -724,31 +805,31 @@ class Context {
       const bracket = /^filter\[([^\]]+)\](?:\[([a-z]+)\])?$/.exec(name);
       if (bracket) {
         addFilter(bracket[1], bracket[2] ?? 'eq', schema, 'high', where);
-        this.pass('query', '6.1', 'Los filtros usan filter[campo][op].', ['query.filter.name']);
+        this.pass('query', '6.1', 'Filters use filter[field][op].', ['query.filter.name']);
         continue;
       }
-      if (n.startsWith('$')) continue; // ya avisado
+      if (n.startsWith('$')) continue; // already warned
       switch (n) {
         case 'limit':
-          if (t === 'integer' || t === 'number') { this.pass('query', '6.4', 'El tamaño de página se pide con limit.', ['query.limit.name']); c.maxLimit = schema.maximum; }
-          else this.add('core', 'core.reserved.conflict', 'error', '5.3', where, 'Usa un parámetro reservado con otro significado.', RESERVED_FIX);
-          if (schema.maximum === undefined) this.add('query', 'query.limit.max', 'warning', '6.4', where, 'limit no declara un máximo.',
-            'Una colección que acepta limit declara max_limit, y sin él limit da unsupported_parameter (§6.4). Declara el máximo (maximum en OpenAPI, max_limit en el descubrimiento); fuera de rango, invalid_parameter.');
+          if (t === 'integer' || t === 'number') { this.pass('query', '6.4', 'The page size is requested with limit.', ['query.limit.name']); c.maxLimit = schema.maximum; }
+          else this.add('core', 'core.reserved.conflict', 'error', '5.3', where, 'Uses a reserved parameter with another meaning.', RESERVED_FIX);
+          if (schema.maximum === undefined) this.add('query', 'query.limit.max', 'warning', '6.4', where, 'limit declares no maximum.',
+            'A collection that accepts limit declares max_limit, and without it limit gives unsupported_parameter (§6.4). Declare the maximum (maximum in OpenAPI, max_limit in the discovery document); out of range, invalid_parameter.');
           continue;
-        case 'cursor': this.pass('query', '6.4', 'Pagina con cursor.', ['query.pagination.offset', 'query.pagination.cursor-param']); continue;
-        case 'fields': this.pass('query', '6.3', 'Admite fields.'); c.fields = true; continue;
-        case 'include': c.includeValues = this.enumOf(schema) ?? []; this.pass('relations', '9', 'Las relaciones se expanden con include.', ['relations.expand']); continue;
+        case 'cursor': this.pass('query', '6.4', 'Paginates with a cursor.', ['query.pagination.offset', 'query.pagination.cursor-param']); continue;
+        case 'fields': this.pass('query', '6.3', 'Supports fields.'); c.fields = true; continue;
+        case 'include': c.includeValues = this.enumOf(schema) ?? []; this.pass('relations', '9', 'Relations are expanded with include.', ['relations.expand']); continue;
         case 'count':
-          if (t === 'boolean') { c.count = true; this.pass('query', '6.5', 'Admite count=true.'); }
-          else if (t === 'integer') this.add('query', 'query.limit.name', 'warning', '6.4', where, 'El tamaño de página no se llama limit.', 'Llámalo limit; count es reservado y en Restep pide el total (count=true, 6.5).');
-          else this.add('core', 'core.reserved.conflict', 'error', '5.3', where, 'Usa un parámetro reservado con otro significado.', RESERVED_FIX);
+          if (t === 'boolean') { c.count = true; this.pass('query', '6.5', 'Supports count=true.'); }
+          else if (t === 'integer') this.add('query', 'query.limit.name', 'warning', '6.4', where, 'The page size is not called limit.', 'Call it limit; count is reserved and in Restep asks for the total (count=true, 6.5).');
+          else this.add('core', 'core.reserved.conflict', 'error', '5.3', where, 'Uses a reserved parameter with another meaning.', RESERVED_FIX);
           continue;
         case 'sort': {
           const vals = this.enumOf(schema);
           if (vals && vals.every((v) => /^(asc|desc|ascending|descending)$/i.test(v)))
-            this.add('core', 'core.reserved.conflict', 'error', '5.3', where, 'Usa un parámetro reservado con otro significado.', RESERVED_FIX);
+            this.add('core', 'core.reserved.conflict', 'error', '5.3', where, 'Uses a reserved parameter with another meaning.', RESERVED_FIX);
           else {
-            this.pass('query', '6.2', 'El orden se pide con sort.', ['query.sort.name']);
+            this.pass('query', '6.2', 'Sorting is requested with sort.', ['query.sort.name']);
             if (vals) c.sort.push(...vals.map((v) => String(v).replace(/^[-+]/, '').replace(/[:.](asc|desc)$/i, '')));
             else c.sortConfidence = 'low';
           }
@@ -763,73 +844,73 @@ class Context {
               if (ops.length) for (const op of ops) addFilter(field, op, this.resolve(opsProps[op]), 'high', where);
               else addFilter(field, 'eq', fs, 'high', where);
             }
-            this.pass('query', '6.1', 'Los filtros usan filter[campo][op].', ['query.filter.name']);
-          } else this.add('extensions', 'filter-expr.string', 'warning', '11.3', where, 'filter es una expresión de texto.',
-            'Con filter=<expresión> Restep pide la extensión filter-expr (sintaxis de la AIP-160 con paréntesis obligatorios); declara además los campos en filter.');
+            this.pass('query', '6.1', 'Filters use filter[field][op].', ['query.filter.name']);
+          } else this.add('extensions', 'filter-expr.string', 'warning', '11.3', where, 'filter is a text expression.',
+            'For filter=<expression> Restep requires the filter-expr extension (AIP-160 syntax with mandatory parentheses); also declare the fields in filter.');
           continue;
         case 'since':
         case 'languages':
-          this.add('core', 'core.reserved.conflict', 'error', '5.3', where, 'Usa un parámetro reservado con otro significado.', RESERVED_FIX);
+          this.add('core', 'core.reserved.conflict', 'error', '5.3', where, 'Uses a reserved parameter with another meaning.', RESERVED_FIX);
           continue;
       }
       if (/^(offset|skip|start|page|page_?number|pagenumber|page_?index|pageno|from_?index)$/i.test(n)) {
-        this.add('query', 'query.pagination.offset', 'error', '6.4', where, 'Pagina por desplazamiento o número de página.',
-          'Pagina con un cursor opaco que viaja en next (6.4); el cliente sigue next tal cual. El servidor puede guardar el desplazamiento dentro del cursor.');
+        this.add('query', 'query.pagination.offset', 'error', '6.4', where, 'Paginates by offset or page number.',
+          'Paginate with an opaque cursor carried in next (6.4); the client follows next as is. The server can keep the offset inside the cursor.');
         continue;
       }
       if (/^(page_?token|after|before|starting_?after|ending_?before|next_?token|next_?cursor|continuation(_?token)?|marker|page_?cursor|cursor_?\w+|\w+_cursor)$/i.test(n)) {
-        this.add('query', 'query.pagination.cursor-param', 'warning', '6.4', where, 'El cursor no se llama cursor.', 'Llámalo cursor, opaco, y ponlo en next; el cliente no lo construye.');
+        this.add('query', 'query.pagination.cursor-param', 'warning', '6.4', where, 'The cursor is not called cursor.', 'Call it cursor, make it opaque and put it in next; the client does not build it.');
         continue;
       }
       if (/^(page_?size|per_?page|size|top|take|max_?results|max_?items|maxpagesize|max|n)$/i.test(n)) {
-        this.add('query', 'query.limit.name', 'warning', '6.4', where, 'El tamaño de página no se llama limit.', 'Llámalo limit, con máximo declarado (max_limit).');
+        this.add('query', 'query.limit.name', 'warning', '6.4', where, 'The page size is not called limit.', 'Call it limit, with a declared maximum (max_limit).');
         if (t === 'integer') c.maxLimit = schema.maximum;
         continue;
       }
       if (/^(sort_?by|order_?by|ordering|order|sort_?order|sort_?dir(ection)?|direction|dir|sort_?field)$/i.test(n)) {
-        this.add('query', 'query.sort.name', 'warning', '6.2', where, 'El orden no usa sort.', 'Usa sort=campo1,-campo2 («-» para descendente) y declara los campos ordenables en sort.');
+        this.add('query', 'query.sort.name', 'warning', '6.2', where, 'Sorting does not use sort.', 'Use sort=field1,-field2 ("-" for descending) and declare the sortable fields in sort.');
         const vals = this.enumOf(schema);
         if (vals && !vals.every((v) => /^(asc|desc|ascending|descending)$/i.test(v))) c.sort.push(...vals.map((v) => String(v).replace(/^[-+]/, '').replace(/[:.](asc|desc)$/i, '')));
         else if (!vals && !/order$|dir|direction/i.test(n)) c.sortConfidence = 'low';
         continue;
       }
       if (/^(select|projection|attributes|only|field_?mask|fieldmask)$/i.test(n)) {
-        this.add('query', 'query.fields.name', 'warning', '6.3', where, 'La selección de campos no usa fields.', 'Usa fields=campo1,campo2 (más id y los miembros _).');
+        this.add('query', 'query.fields.name', 'warning', '6.3', where, 'Field selection does not use fields.', 'Use fields=field1,field2 (plus id and the _ members).');
         continue;
       }
       if (/^(expand|embed|with|includes|populate|join)$/i.test(n)) {
-        this.add('relations', 'relations.expand', 'warning', '9', where, 'La expansión de relaciones no usa include.', 'Usa include=relacion (con rutas con punto hasta include_depth) y declara las relaciones expandibles.');
+        this.add('relations', 'relations.expand', 'warning', '9', where, 'Relation expansion does not use include.', 'Use include=relation (with dotted paths up to include_depth) and declare the expandable relations.');
         continue;
       }
       if (/^(include_?total|with_?count|total|count_?total|with_?total|totals|inlinecount)$/i.test(n)) {
-        this.add('query', 'query.count.name', 'warning', '6.5', where, 'El total no se pide con count.', 'Usa count=true, que añade total a la respuesta, y declara count en la colección.');
+        this.add('query', 'query.count.name', 'warning', '6.5', where, 'The total is not requested with count.', 'Use count=true, which adds total to the response, and declare count on the collection.');
         c.count = true;
         continue;
       }
       if (/^(q|query|search|term|keyword|keywords|text|search_?term|fulltext)$/i.test(n)) {
-        // §6.1: un criterio que no compara un campo es un filtro con nombre, con su descripción.
+        // §6.1: a criterion that does not compare a field is a named filter, with its description.
         const nf = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name) ? name : 'search';
-        addNamed(nf, schema, where, firstSentence(p.description) ?? `Búsqueda de texto libre (deducida de ?${name}: describe qué campos mira y cómo compara).`);
-        this.add('query', 'query.search', 'info', '6.1', `${where} → filter[${nf}]`, 'Búsqueda de texto libre.',
-          'Restep la expresa como filtro con nombre (named_filters): filter[' + nf + ']=texto, declarado con type string y una descripción que diga qué elementos devuelve. '
-          + 'El parámetro propio puede seguir también, porque no es reservado.');
+        addNamed(nf, schema, where, firstSentence(p.description) ?? `Free-text search (inferred from ?${name}: describe which fields it looks at and how it compares).`);
+        this.add('query', 'query.search', 'info', '6.1', `${where} → filter[${nf}]`, 'Free-text search.',
+          'Restep expresses it as a named filter (named_filters): filter[' + nf + ']=text, declared with type string and a description saying which items it returns. '
+          + 'Your own parameter can stay too, since it is not reserved.');
         continue;
       }
       if (/^(updated_?(since|after)|modified_?(since|after)|changed_?since|sync_?token|delta(_?token)?|last_?sync)$/i.test(n)) {
-        this.add('sync', 'sync.delta', 'warning', '10', where, 'La sincronización usa un parámetro propio.', 'Ofrece GET /coleccion:changes?since=<state> con created, updated y destroyed, y state en cada lista.');
+        this.add('sync', 'sync.delta', 'warning', '10', where, 'Sync uses its own parameter.', 'Offer GET /collection:changes?since=<state> with created, updated and destroyed, and state in every list.');
         this.syncHint = true;
-        // También vale como filtro de fecha
+        // Also valid as a date filter
       }
-      // Lo demás: un filtro con nombre no reservado.
+      // The rest: a named filter that is not reserved.
       const inferred = this.inferFilter(name, schema, matchField);
       const routed = addFilter(inferred.field, inferred.op, inferred.schema ?? schema, inferred.confidence, where);
       if (inferred.op2 && !routed) addFilter(inferred.field, inferred.op2, inferred.schema ?? schema, inferred.confidence, where);
       const target = routed === 'named' || inferred.op === 'eq' ? `filter[${inferred.field}]` : `filter[${inferred.field}][${inferred.op}]`;
-      this.add('query', 'query.filter.name', 'warning', '6.1', `${where} → ${target}`, 'Los filtros usan nombres propios, no filter[campo][op].',
-        'Pasa cada filtro a filter[campo] o filter[campo][op] y declara campo, tipo y operadores en filter: así un filtro que el servidor no conoce da 400 en vez de devolver la colección entera.');
+      this.add('query', 'query.filter.name', 'warning', '6.1', `${where} → ${target}`, 'Filters use their own names, not filter[field][op].',
+        'Move each filter to filter[field] or filter[field][op] and declare field, type and operators in filter: that way a filter the server does not know gives 400 instead of returning the whole collection.');
     }
-    if (!anyQuery) this.add('query', 'query.absent', 'warning', '6', get.where, 'La lista no admite filtros, orden ni tamaño de página.',
-      'Con query, la colección declara sus filtros, su orden y max_limit; sin él, el servidor debe responder 400 a esos parámetros (5.3).');
+    if (!anyQuery) this.add('query', 'query.absent', 'warning', '6', get.where, 'The list supports no filters, sorting or page size.',
+      'With query, the collection declares its filters, its sort and max_limit; without it, the server must respond 400 to those parameters (5.3).');
   }
 
   enumOf(schema) {
@@ -839,7 +920,7 @@ class Context {
     return null;
   }
 
-  // Deduce campo y operador de un parámetro con nombre libre: min_price → price ge, created_after → created_at gt…
+  // Infers field and operator from a free-named parameter: min_price → price ge, created_after → created_at gt…
   inferFilter(name, schema, matchField) {
     const n = words(name);
     const rules = [
@@ -858,7 +939,7 @@ class Context {
     return { field: field ?? base, op, op2: op === 'in' && isArray ? 'eq' : null, confidence, schema: isArray ? this.resolve(schema).items : schema };
   }
 
-  // Tipos de dato, nombres e identificadores (§3), sobre los esquemas de los elementos.
+  // Data types, names and identifiers (§3), over the item schemas.
   checkFields() {
     const seen = new Set();
     const camel = [], snakeNames = [];
@@ -868,30 +949,30 @@ class Context {
       const key = name ?? where;
       if (seen.has(key)) return;
       seen.add(key);
-      const at = name ? `esquema ${name}` : where;
+      const at = name ? `schema ${name}` : where;
       const props = this.props(schema);
       for (const [k, v0] of Object.entries(props)) {
         const v = this.resolve(v0);
         const t = this.typeOf(v);
         if (/[a-z][A-Z]/.test(k)) camel.push(`${at}.${k}`);
         else if (/^[a-z0-9]+(_[a-z0-9]+)+$/.test(k)) snakeNames.push(`${at}.${k}`);
-        if (v?.deprecated === true) this.add('core', 'core.deprecated', 'info', '5.5', `${at}.${k}`, 'Algo está marcado como deprecated.',
-            'Restep lo anuncia en deprecations del descubrimiento (§5.5), con su kind (field, filter, method, collection…), announced (el instante en que se publicó el aviso, que no cambia) y sunset cuando haya fecha; las respuestas que lo usan llevan Deprecation y Link rel="deprecation". El borrador no lo declara: OpenAPI no dice cuándo se anunció.');
-        if (k.startsWith('_')) this.add('core', 'data.underscore', 'error', '3', `${at}.${k}`, 'Un campo empieza por «_».', 'Los miembros con _ son de Restep (_etag, _actions…): renombra el campo.');
+        if (v?.deprecated === true) this.add('core', 'core.deprecated', 'info', '5.5', `${at}.${k}`, 'Something is marked deprecated.',
+            'Restep announces it in deprecations in the discovery document (§5.5), with its kind (field, filter, method, collection…), announced (the instant the notice was published, which does not change) and sunset when there is a date; responses that use it carry Deprecation and Link rel="deprecation". The draft does not declare it: OpenAPI does not say when it was announced.');
+        if (k.startsWith('_')) this.add('core', 'data.underscore', 'error', '3', `${at}.${k}`, 'A field starts with "_".', 'Members with _ belong to Restep (_etag, _actions…): rename the field.');
         if (k !== 'id' && t === 'integer' && (v.format === 'int64' || v.format === 'uint64'))
-          this.add('core', 'data.int64', 'warning', '3', `${at}.${k}`, 'Un entero de 64 bits va como número.', 'Si puede pasar de ±(2^53−1), envíalo como cadena en todas las representaciones.');
+          this.add('core', 'data.int64', 'warning', '3', `${at}.${k}`, 'A 64-bit integer is sent as a number.', 'If it can exceed ±(2^53−1), send it as a string in every representation.');
         if (t === 'number' && MONEY.test(k))
-          this.add('core', 'data.money', 'warning', '3', `${at}.${k}`, 'Un importe va como número.', 'Los importes van como cadena decimal ("18.50"), acompañados de su moneda ISO 4217.');
+          this.add('core', 'data.money', 'warning', '3', `${at}.${k}`, 'An amount is sent as a number.', 'Amounts go as a decimal string ("18.50"), together with their ISO 4217 currency.');
         if ((t === 'integer' || t === 'number') && /(_at|At|timestamp|Timestamp|_time|Time|_date|Date)$/.test(k))
-          this.add('core', 'data.timestamp-number', 'warning', '3', `${at}.${k}`, 'Un instante va como número.', 'Los instantes van como date-time del RFC 3339 con desfase ("2026-11-12T09:30:00Z").');
+          this.add('core', 'data.timestamp-number', 'warning', '3', `${at}.${k}`, 'An instant is sent as a number.', 'Instants go as RFC 3339 date-time with offset ("2026-11-12T09:30:00Z").');
         if (t === 'string' && !v.format && /(_at|At|_date|Date|_on)$/.test(k))
-          this.add('core', 'data.date-format', 'info', '3', `${at}.${k}`, 'Una fecha o un instante sin formato declarado.', 'Declara format: date-time (RFC 3339 con desfase) o format: date.');
+          this.add('core', 'data.date-format', 'info', '3', `${at}.${k}`, 'A date or instant with no declared format.', 'Declare format: date-time (RFC 3339 with offset) or format: date.');
         if (k !== 'id' && /^(.+?)(_id|Id|ID)$/.test(k) && (t === 'string' || t === 'integer'))
-          this.add('relations', 'relations.scalar-fk', 'warning', '3', `${at}.${k}`, 'Una relación va como identificador suelto.',
-            'Una relación es un objeto con id: "owner": {"id": "4"}, para que el tipo no cambie al incluir el elemento (3, 9).');
+          this.add('relations', 'relations.scalar-fk', 'warning', '3', `${at}.${k}`, 'A relation is sent as a bare identifier.',
+            'A relation is an object with id: "owner": {"id": "4"}, so the type does not change when the item is included (3, 9).');
         if (/^(.+?)(_ids|Ids|IDs)$/.test(k) && t === 'array')
-          this.add('relations', 'relations.id-array', 'warning', '3', `${at}.${k}`, 'Una relación a muchos va como lista de identificadores.',
-            'Una relación a muchos es una lista de objetos con id, o mejor una subcolección si puede crecer sin límite (9).');
+          this.add('relations', 'relations.id-array', 'warning', '3', `${at}.${k}`, 'A to-many relation is sent as a list of identifiers.',
+            'A to-many relation is a list of objects with id, or better a subcollection if it can grow without limit (9).');
         if (t === 'object' && depth < 2 && !this.refName(v0)) visit(v, `${at}.${k}`, depth + 1);
       }
     };
@@ -899,17 +980,17 @@ class Context {
       const schema = c.itemSchema ?? c.listItemSchema;
       if (!schema) continue;
       const name = this.refName(schema);
-      const at = name ? `esquema ${name}` : `${c.path}`;
+      const at = name ? `schema ${name}` : `${c.path}`;
       const props = this.props(schema);
       if (Object.keys(props).length) {
         if (!('id' in props)) {
           const alt = Object.keys(props).find((k) => /^(uuid|_id|key|guid|\w+_?id)$/i.test(k));
-          this.add('core', 'data.id.missing', 'warning', '3', `${at}${alt ? ` (${alt})` : ''}`, 'El elemento no tiene campo «id».', 'El identificador de un elemento se llama id y es una cadena.');
+          this.add('core', 'data.id.missing', 'warning', '3', `${at}${alt ? ` (${alt})` : ''}`, 'The item has no "id" field.', 'The identifier of an item is called id and is a string.');
         } else {
           const t = this.typeOf(props.id);
           if (t === 'integer' || t === 'number') this.add('core', 'data.id.type', 'error', '3', `${at}.id (${t})`,
-            'El identificador es un número.', 'El id es una cadena ("7"), siempre: así se puede cambiar de generador de ids sin romper a los clientes.');
-          else if (t === 'string') this.pass('core', '3', 'Los id son cadenas.', ['data.id.type']);
+            'The identifier is a number.', 'The id is always a string ("7"): that way the id generator can change without breaking clients.');
+          else if (t === 'string') this.pass('core', '3', 'Ids are strings.', ['data.id.type']);
         }
       }
       visit(schema, c.path);
@@ -917,43 +998,43 @@ class Context {
         if (s) for (const m of Object.values(s)) if (m.schema) visit(m.schema, c.path);
     }
     if (camel.length && snakeNames.length) this.add('core', 'data.naming', 'warning', '3', [`camelCase: ${camel.slice(0, 3).join(', ')}`, `snake_case: ${snakeNames.slice(0, 3).join(', ')}`],
-      'Los campos mezclan camelCase y snake_case.', 'Sigue un único convenio para los nombres de campo; los que define Restep van en snake_case.');
+      'Fields mix camelCase and snake_case.', 'Follow a single convention for field names; the ones Restep defines are snake_case.');
   }
 
   checkSync() {
     for (const o of this.ops) {
-      if (/:changes$/.test(o.path)) { this.pass('sync', '10', 'Ofrece :changes.'); this.syncHint = true; this.syncNative = true; }
+      if (/:changes$/.test(o.path)) { this.pass('sync', '10', 'Offers :changes.'); this.syncHint = true; this.syncNative = true; }
       else if (/\/(changes|delta|sync)$/i.test(o.path)) {
-        this.add('sync', 'sync.endpoint', 'warning', '10', o.where, 'La sincronización tiene un endpoint propio.', 'Restep usa GET /coleccion:changes?since=<state> por colección, con state en cada lista.');
+        this.add('sync', 'sync.endpoint', 'warning', '10', o.where, 'Sync has its own endpoint.', 'Restep uses GET /collection:changes?since=<state> per collection, with state in every list.');
         this.syncHint = true;
       }
       if (o.op.callbacks && Object.keys(o.op.callbacks).length) this.webhooks = true;
     }
     if (isObject(this.doc.webhooks) && Object.keys(this.doc.webhooks).length) this.webhooks = true;
     if (this.webhooks) {
-      this.add('sync', 'sync.webhooks', 'info', '10', 'webhooks/callbacks', 'Avisa de cambios con webhooks.',
-        'Los webhooks pueden seguir; para mantener copias al día Restep usa :changes y, si quieres empujar avisos, un canal SSE declarado en events.');
+      this.add('sync', 'sync.webhooks', 'info', '10', 'webhooks/callbacks', 'Notifies changes with webhooks.',
+        'Webhooks can stay; to keep copies up to date Restep uses :changes and, if you want to push notifications, an SSE channel declared in events.');
       this.syncHint = true;
     }
-    if (this.syncHint && !this.syncNative) this.add('sync', 'sync.changes', 'error', '10', 'todas las colecciones', 'No hay :changes ni state.',
-      'La colección declara sync (y la API el perfil sync, experimental: §1.2); cada lista lleva state; GET /coleccion:changes?since=<state> devuelve created, updated y destroyed; y la colección declara filter[id] con in.');
+    if (this.syncHint && !this.syncNative) this.add('sync', 'sync.changes', 'error', '10', 'all collections', 'There is no :changes or state.',
+      'The collection declares sync (and the API the sync profile, experimental: §1.2); every list carries state; GET /collection:changes?since=<state> returns created, updated and destroyed; and the collection declares filter[id] with in.');
   }
 
-  // ── Borrador del descubrimiento ──────────────────────────────────────────
+  // ── Discovery draft ──────────────────────────────────────────
 
   buildDiscovery() {
     const ann = this.options.annotations !== false;
     const withSchemas = this.options.schemas !== false;
-    // §1.1: un servidor que implementa un borrador lo declara con su sufijo.
+    // §1.1: a server that implements a draft declares it with its suffix.
     const d = { restep: RESTEP_VERSION };
     if (this.majorVersion) d.version = this.majorVersion;
     const collections = {};
     const lowNotes = [];
-    // Claves de las colecciones: nombres válidos (§3) y sin repetir; se calculan antes para que
-    // parent y relations puedan nombrar a cualquiera.
+    // Collection keys: valid names (§3) and no repeats; computed first so that
+    // parent and relations can name any of them.
     const nameOf = new Map();
     for (const c of this.collections) {
-      const base = NAME_RE.test(c.name) ? c.name : (snake(c.name) || 'coleccion');
+      const base = NAME_RE.test(c.name) ? c.name : (snake(c.name) || 'collection');
       let key = base;
       for (let i = 2; [...nameOf.values()].includes(key); i++) key = `${base}_${i}`;
       nameOf.set(c, key);
@@ -965,19 +1046,19 @@ class Context {
     for (const c of this.collections) {
       const notes = [];
       const out = { path: c.declaredPath };
-      if (c.declaredPath !== c.path) notes.push(`path: las variables de la plantilla se renombran para que sean distintas y simples (§4.2); en OpenAPI es ${c.path}`);
-      // §4.2: una subcolección nombra en parent la colección de cuyos elementos cuelga.
+      if (c.declaredPath !== c.path) notes.push(`path: template variables are renamed to be distinct and simple (§4.2); in OpenAPI it is ${c.path}`);
+      // §4.2: a subcollection names in parent the collection whose items it hangs from.
       if (c.parent) out.parent = nameOf.get(c.parent);
       const desc = firstSentence(c.ops.GET?.op.summary) ?? firstSentence(c.ops.GET?.op.description) ?? firstSentence(this.tagDescription(c));
       if (desc) out.description = desc;
       const methods = ['GET', 'POST', 'PATCH', 'DELETE'].filter((m) => c.ops[m]);
       const itemMethods = ['GET', 'PATCH', 'DELETE'].filter((m) => c.itemOps[m]);
-      if (c.itemOps.PUT && !c.itemOps.PATCH) { itemMethods.splice(1, 0, 'PATCH'); notes.push('item_methods: PATCH sale del PUT, que Restep no admite'); }
+      if (c.itemOps.PUT && !c.itemOps.PATCH) { itemMethods.splice(1, 0, 'PATCH'); notes.push('item_methods: PATCH comes from the PUT, which Restep does not allow'); }
       if (methods.length) out.methods = methods;
-      if (c.idFrom) { out.id_from = c.idFrom; notes.push(`id_from: ${c.idFrom}, porque el cuerpo de creación admite id${c.idFrom === 'client' ? ' y lo exige' : ''} (§5.1)`); }
+      if (c.idFrom) { out.id_from = c.idFrom; notes.push(`id_from: ${c.idFrom}, because the create body accepts id${c.idFrom === 'client' ? ' and requires it' : ''} (§5.1)`); }
       if (c.itemPath && itemMethods.length) out.item_methods = itemMethods;
-      else if (!c.itemPath) notes.push('no hay ruta de elemento (/{id}) en OpenAPI');
-      // Esquemas
+      else if (!c.itemPath) notes.push('there is no item path (/{id}) in OpenAPI');
+      // Schemas
       if (withSchemas) {
         const schemas = {};
         if (c.itemSchema) schemas.item = this.toJsonSchema(c.itemSchema);
@@ -985,32 +1066,50 @@ class Context {
         const cm = create && Object.keys(create).find(isJsonMedia);
         if (cm && create[cm].schema) {
           schemas.create = this.toJsonSchema(create[cm].schema);
-          if (!c.idFrom && this.dropId(schemas.create)) notes.push('schemas.create: se ha quitado id, que asigna el servidor');
+          if (!c.idFrom && this.dropId(schemas.create)) notes.push('schemas.create: id removed, the server assigns it');
+          // §4.3 (draft 7): a default in a top-level property of create is the value the field takes, and MUST be
+          // valid against the property's schema. An invalid one is reported and left out.
+          for (const [f, prop] of Object.entries(isObject(schemas.create.properties) ? schemas.create.properties : {})) {
+            if (!isObject(prop) || !('default' in prop)) continue;
+            const { default: value, ...rest } = prop;
+            const errors = validate({ ...rest, $defs: schemas.create.$defs }, value);
+            if (!errors.length) continue;
+            delete prop.default;
+            notes.push(`schemas.create.${f}: default ${JSON.stringify(value)} removed, it is not valid against the property (§4.3)`);
+            this.add('core', 'core.schema.default', 'warning', '4.3', `${c.ops.POST.where} → ${f}`, 'A default that its own property does not accept.',
+              `default ${JSON.stringify(value)} does not fit the schema of ${f} (${errors[0].message}). In Restep the server gives the field that value when a POST leaves it out, and it MUST be valid (§4.3): fix it or remove it. The draft leaves it out.`);
+          }
         }
         const upd = this.resolve(c.itemOps.PATCH?.op.requestBody)?.content;
         const um = upd ? (Object.keys(upd).find((m) => /merge-patch\+json/i.test(m)) ?? Object.keys(upd).find(isJsonMedia)) : null;
         if (um && upd[um].schema && !/json-patch/i.test(um)) {
           schemas.update = this.toJsonSchema(upd[um].schema);
-          if (this.dropId(schemas.update)) notes.push('schemas.update: se ha quitado id, que no cambia');
+          if (this.dropId(schemas.update)) notes.push('schemas.update: id removed, it does not change');
         }
         else {
           const put = this.resolve(c.itemOps.PUT?.op.requestBody)?.content;
           const pm = put && Object.keys(put).find(isJsonMedia);
-          if (pm && put[pm].schema) { schemas.update = this.mergePatchSchema(this.toJsonSchema(put[pm].schema)); this.dropId(schemas.update); notes.push('schemas.update sale del cuerpo del PUT, sin required y con null admitido'); }
+          if (pm && put[pm].schema) { schemas.update = this.mergePatchSchema(this.toJsonSchema(put[pm].schema)); this.dropId(schemas.update); notes.push('schemas.update comes from the PUT body, without required and with null allowed'); }
         }
-        if (schemas.update && this.dropDefaults(schemas.update)) notes.push('schemas.update: se han quitado los default, que en un PATCH no significan nada (§4.3)');
+        if (schemas.update && this.dropDefaults(schemas.update)) notes.push('schemas.update: defaults removed, they mean nothing in a PATCH (§4.3)');
+        // §5.1 (council, round 3, decision 1): with upload, create only where the POST takes JSON.
+        if (c.upload && !c.createsFromJson && schemas.create) { delete schemas.create; notes.push('schemas.create: left out, the POST only takes files (§5.1)'); }
         if (Object.keys(schemas).length) out.schemas = schemas;
       }
-      // Filtros
+      // Filters
       const filter = {};
       for (const [field, f] of Object.entries(c.filters ?? {})) {
-        if (!FIELD_PATH_RE.test(field)) { notes.push(`filter.${field}: no sigue la gramática de nombres (§3) y no se declara`); continue; }
-        const decl = this.filterType(f.schema, field, c);
-        // §6.1: boolean solo con eq, ne y null; el filtro de id, sin operadores de orden.
-        const ops = f.ops.filter((op) => (decl.type !== 'boolean' || ['eq', 'ne', 'null'].includes(op)) && (field !== 'id' || !['lt', 'le', 'gt', 'ge'].includes(op)));
-        if (ops.length < f.ops.length) notes.push(`filter.${field}: se quitan ${f.ops.filter((op) => !ops.includes(op)).join(', ')}, que §6.1 no permite para ${field === 'id' ? 'id' : 'un boolean'}`);
+        if (!FIELD_PATH_RE.test(field)) { notes.push(`filter.${field}: does not follow the name grammar (§3) and is not declared`); continue; }
+        const decl = f.relationNull ? { type: 'string' } : f.quantifier ? this.filterType(f.elem, '', { itemSchema: {} }) : this.filterType(f.schema, field, c);
+        // §6.1: only the operators of the list; boolean only with eq, ne and null; the id filter, without order operators;
+        // prefix and contains only on strings; ne and nin never with quantifier.
+        const ops = f.ops.filter((op) => OPERATORS.includes(op) && (decl.type !== 'boolean' || ['eq', 'ne', 'null'].includes(op)) && (field !== 'id' || !['lt', 'le', 'gt', 'ge', 'prefix', 'contains'].includes(op))
+          && (!['prefix', 'contains'].includes(op) || decl.type === 'string') && (!f.quantifier || !['ne', 'nin'].includes(op)));
+        if (ops.length < f.ops.length) notes.push(`filter.${field}: removed ${f.ops.filter((op) => !ops.includes(op)).join(', ')}, which §6.1 does not allow there`);
         if (!ops.length) continue;
-        const entry = { type: decl.type, ...(decl.values ? { values: decl.values } : {}), ops };
+        // §6.1 (council, decision 1): null alone on the list field itself carries no quantifier.
+        const quantifier = f.quantifier && !(ops.length === 1 && ops[0] === 'null') ? f.quantifier : undefined;
+        const entry = { type: decl.type, ...(decl.values ? { values: decl.values } : {}), ops, ...(quantifier && { quantifier }) };
         const low = f.confidence === 'low' || decl.low;
         if (ann && f.confidence !== 'high') entry['x-confidence'] = low ? 'low' : 'medium';
         if (ann && f.confidence !== 'high') entry['x-source'] = [...new Set(f.sources)].join('; ');
@@ -1027,10 +1126,19 @@ class Context {
       }
       const sort = [...new Set(c.sort ?? [])].filter((s) => FIELD_PATH_RE.test(s));
       if (sort.length) { out.sort = sort; anyQuery = true; }
-      if (!sort.length && c.sortConfidence === 'low') notes.push('hay un parámetro de orden sin lista de campos: completa sort a mano');
+      if (!sort.length && c.sortConfidence === 'low') notes.push('there is a sort parameter without a list of fields: fill in sort by hand');
       if (Number.isInteger(c.maxLimit) && c.maxLimit >= 1) { out.max_limit = c.maxLimit; anyQuery = true; }
-      if (c.count || c.countField) { out.count = 'exact'; notes.push('count: se supone exact; usa estimated si el total es aproximado'); anyQuery = true; }
-      // Relaciones
+      if (c.upload && methods.includes('POST')) {
+        out.upload = c.upload;
+        notes.push('upload: from the file the POST carries; add max_size (§5.1)');
+        // §5.1 (council, round 3, decision 1): schemas.create says that the collection also creates items from JSON.
+        if (c.createsFromJson && !out.schemas?.create) {
+          out.schemas = { ...(out.schemas ?? {}), create: { type: 'object' } };
+          notes.push('schemas.create: {"type": "object"}, because the POST also takes JSON and, with upload, create announces it (§5.1); describe the body');
+        }
+      }
+      if (c.count || c.countField) { out.count = 'exact'; notes.push('count: assumed exact; use estimated if the total is approximate'); anyQuery = true; }
+      // Relations
       const relations = {};
       const props = this.props(c.itemSchema);
       for (const [k, v0] of Object.entries(props)) {
@@ -1041,16 +1149,16 @@ class Context {
         let rel = null;
         if (k !== 'id' && fk && (t === 'string' || t === 'integer')) {
           const target = this.findCollection(fk[1]);
-          if (target) rel = { name: snake(fk[1]), decl: { to: nameOf.get(target) }, conf: 'low', note: `relación deducida de ${k}: la representación debe pasar a ${snake(fk[1])}: {"id": …}` };
+          if (target) rel = { name: snake(fk[1]), decl: { to: nameOf.get(target) }, conf: 'low', note: `relation inferred from ${k}: the representation must become ${snake(fk[1])}: {"id": …}` };
         } else if (fks && t === 'array') {
           const target = this.findCollection(fks[1]);
-          if (target) rel = { name: plural(snake(fks[1])), decl: { to: nameOf.get(target), many: true }, conf: 'low', note: `relación deducida de ${k}: debe pasar a una lista de objetos con id` };
+          if (target) rel = { name: plural(snake(fks[1])), decl: { to: nameOf.get(target), many: true }, conf: 'low', note: `relation inferred from ${k}: it must become a list of objects with id` };
         } else if (t === 'object' && this.refName(v0) && bySchema.has(this.refName(v0))) {
-          rel = { name: k, decl: { to: nameOf.get(bySchema.get(this.refName(v0))), include: true }, conf: 'medium', note: `relación deducida del esquema ${this.refName(v0)} incrustado` };
+          rel = { name: k, decl: { to: nameOf.get(bySchema.get(this.refName(v0))), include: true }, conf: 'medium', note: `relation inferred from the embedded schema ${this.refName(v0)}` };
         } else if (t === 'object' && 'id' in this.props(v) && Object.keys(this.props(v)).every((x) => ['id', 'type', 'href'].includes(x)) && this.findCollection(k)) {
-          rel = { name: k, decl: { to: nameOf.get(this.findCollection(k)) }, conf: 'medium', note: `relación deducida del objeto {id} en ${k}` };
+          rel = { name: k, decl: { to: nameOf.get(this.findCollection(k)) }, conf: 'medium', note: `relation inferred from the {id} object in ${k}` };
         } else if (t === 'array' && this.refName(v.items) && bySchema.has(this.refName(v.items))) {
-          rel = { name: k, decl: { to: nameOf.get(bySchema.get(this.refName(v.items))), many: true }, conf: 'medium', note: `relación deducida de la lista de ${this.refName(v.items)}` };
+          rel = { name: k, decl: { to: nameOf.get(bySchema.get(this.refName(v.items))), many: true }, conf: 'medium', note: `relation inferred from the list of ${this.refName(v.items)}` };
         }
         if (rel) {
           if ((c.includeValues ?? []).includes(rel.name)) rel.decl.include = true;
@@ -1063,29 +1171,32 @@ class Context {
         const decl = { to: nameOf.get(child), many: true, path: templatePath(child.path) };
         relations[child.segment in relations || !NAME_RE.test(child.segment) ? nameOf.get(child) : child.segment] = decl;
       }
-      for (const k of Object.keys(relations)) if (!NAME_RE.test(k)) { notes.push(`relations.${k}: no sigue la gramática de nombres (§3) y no se declara`); delete relations[k]; }
+      for (const k of Object.keys(relations)) if (!NAME_RE.test(k)) { notes.push(`relations.${k}: does not follow the name grammar (§3) and is not declared`); delete relations[k]; }
       for (const [k, r] of Object.entries(relations)) {
         const target = this.collections.find((x) => nameOf.get(x) === r.to);
-        if (!r.many && target?.parent) notes.push(`relations.${k}: su destino es una subcolección, así que cada objeto de la relación lleva href (§3, §5.1)`);
+        if (!r.many && target?.parent) notes.push(`relations.${k}: its target is a subcollection, so every object of the relation carries href (§3, §5.1)`);
       }
       if (Object.keys(relations).length) { out.relations = relations; anyRelations = true; }
-      // §6.1: ni rutas que atraviesan una relación a muchos ni la que acaba en el id del elemento de
-      // una subcolección se declaran en filter o sort.
+      // §6.1: neither paths that cross a to-many relation nor the one that ends in the id of the item of
+      // a subcollection are declared in filter or sort.
       const forbidden = (path) => {
         const [first, ...rest] = path.split('.');
         const r = relations[first];
         if (!r || !rest.length) return null;
-        if (r.many) return 'atraviesa una relación a muchos';
+        if (r.many) return 'goes through a to-many relation';
         const target = this.collections.find((x) => nameOf.get(x) === r.to);
-        if (rest.join('.') === 'id' && target?.parent) return 'acaba en el id de un elemento de una subcolección';
+        if (rest.join('.') === 'id' && target?.parent) return 'ends in the id of a subcollection item';
         return null;
       };
-      for (const k of Object.keys(filter)) { const why = forbidden(k); if (why) { notes.push(`filter.${k}: ${why} y no se declara (§6.1)`); delete filter[k]; } }
+      for (const k of Object.keys(filter)) { const why = forbidden(k); if (why) { notes.push(`filter.${k}: ${why} and is not declared (§6.1)`); delete filter[k]; } }
+      for (const [k, f] of Object.entries(c.filters ?? {})) {
+        if (f.relationNull && filter[k] && !relations[k]?.many) { notes.push(`filter.${k}: null on a list of objects that is not a to-many relation is not declared (§6.1)`); delete filter[k]; }
+      }
       if (Object.keys(filter).length) { out.filter = filter; anyQuery = true; }
       if (Object.keys(named).length) { out.named_filters = named; anyQuery = true; }
-      const sortOk = sort.filter((k) => { const why = forbidden(k); if (why) notes.push(`sort.${k}: ${why} y no se declara (§6.1)`); return !why; });
+      const sortOk = sort.filter((k) => { const why = forbidden(k); if (why) notes.push(`sort.${k}: ${why} and is not declared (§6.1)`); return !why; });
       if (sortOk.length) out.sort = sortOk; else delete out.sort;
-      // Acciones
+      // Actions
       const actions = {};
       for (const a of c.actions) {
         const name = snake(a.name);
@@ -1100,7 +1211,7 @@ class Context {
         if (!safe && withSchemas && bm && body[bm].schema) decl.input = this.toJsonSchema(body[bm].schema);
         if (ann) { decl['x-confidence'] = a.style === 'colon' ? 'medium' : 'low'; decl['x-source'] = `${a.o.where}${a.style === 'verb' ? ` → ${safe ? 'GET' : 'POST'} ${this.prefix}${a.base}:${name}` : ''}`; }
         if (a.style === 'verb') lowNotes.push(`${c.name}.actions.${name}`);
-        if (!safe) notes.push(`actions.${name}: idempotent ${decl.idempotent} es una suposición`);
+        if (!safe) notes.push(`actions.${name}: idempotent ${decl.idempotent} is an assumption`);
         actions[name] = decl;
       }
       if (Object.keys(actions).length) { out.actions = actions; anyActions = true; }
@@ -1108,7 +1219,7 @@ class Context {
         const conf = !c.itemPath || !c.ops.GET ? 'low' : 'high';
         out['x-restep-from-openapi'] = { confidence: conf, source: [c.ops.GET?.where, c.itemOps.GET?.where].filter(Boolean).join(', ') || c.path, ...(notes.length ? { notes } : {}) };
       }
-      if (!c.ops.GET) lowNotes.push(`${c.name} (sin GET de lista en OpenAPI)`);
+      if (!c.ops.GET) lowNotes.push(`${c.name} (no list GET in OpenAPI)`);
       c.notes = notes;
       collections[nameOf.get(c)] = out;
     }
@@ -1116,7 +1227,7 @@ class Context {
     if (anyQuery) profiles.push('query');
     const writesErrors = [...this.findings.values()].some((f) => f.profile === 'writes' && f.severity === 'error');
     if (this.hasWrites && !writesErrors && !this.findings.has('writes.idempotency')) profiles.push('writes');
-    // cache (§8) solo si toda lectura documenta Cache-Control y todo GET de elemento, ETag.
+    // cache (§8) only if every read documents Cache-Control and every item GET, ETag.
     if (this.cacheHint && !this.cacheMissing && this.collections.some((c) => c.ops.GET || c.itemOps.GET)) profiles.push('cache');
     if (anyRelations) profiles.push('relations');
     d.profiles = profiles;
@@ -1130,10 +1241,19 @@ class Context {
       d.status = /^[a-z][a-z0-9+.-]*:|^\//i.test(base + this.statusPath) ? base + this.statusPath : '/' + (base + this.statusPath).replace(/^\/*/, '');
     }
     d.collections = collections;
-    // Singletons (§5.9): GET y, si hay PATCH o PUT, PATCH; esquemas item y update.
+    // Singletons (§5.9): GET and, if there is PATCH or PUT, PATCH; item and update schemas.
     const singletons = {};
     for (const sg of this.singletons ?? []) {
       const out = { path: sg.path };
+      if (sg.parent) {
+        // §5.9: the parent's item path (its declared template and a simple variable of its own), then the literals.
+        const last = sg.parent.itemPath.split('/').at(-1), base = sg.parent.declaredPath ?? sg.parent.path;
+        const used = new Set([...base.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]));
+        let v = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(last) ? last.slice(1, -1) : `${snake(nameOf.get(sg.parent))}_id`;
+        if (used.has(v)) v = `${nameOf.get(sg.parent).replace(/s$/, '')}_id`;
+        out.path = `${base}/{${v}}${sg.path.slice(sg.parent.itemPath.length)}`;
+        out.parent = nameOf.get(sg.parent);
+      }
       out.methods = ['GET', ...(sg.ops.PATCH || sg.ops.PUT ? ['PATCH'] : [])];
       const desc = firstSentence(sg.ops.GET.op.summary) ?? firstSentence(sg.ops.GET.op.description);
       if (desc) out.description = desc;
@@ -1150,7 +1270,7 @@ class Context {
         }
         if (Object.keys(schemas).length) out.schemas = schemas;
       }
-      if (ann) { out['x-confidence'] = 'medium'; out['x-source'] = Object.values(sg.ops).map((o) => o.where).join(', ') + (sg.ops.PUT && !sg.ops.PATCH ? ' (el PUT pasa a PATCH)' : ''); }
+      if (ann) { out['x-confidence'] = 'medium'; out['x-source'] = Object.values(sg.ops).map((o) => o.where).join(', ') + (sg.ops.PUT && !sg.ops.PATCH ? ' (the PUT becomes PATCH)' : ''); }
       singletons[sg.name] = out;
     }
     if (Object.keys(singletons).length) d.singletons = singletons;
@@ -1158,15 +1278,15 @@ class Context {
       generator: `restep-from-openapi ${VERSION}`,
       source: `${this.title}${this.apiVersion ? ` ${this.apiVersion}` : ''} (OpenAPI ${this.openapi})`,
       api_root: this.root,
-      note: 'Borrador deducido de la descripción OpenAPI. Revisa lo marcado con x-confidence low o medium y quita los miembros x-restep-from-openapi, x-confidence y x-source antes de publicarlo.',
+      note: 'Draft inferred from the OpenAPI description. Review what is marked x-confidence low or medium and remove the x-restep-from-openapi, x-confidence and x-source members before publishing it.',
     };
     this.discovery = d;
     this.lowNotes = lowNotes;
   }
 
-  // Quita id de un esquema de cuerpo (5.1: lo asigna el servidor y no cambia).
-  // §4.3: en update un default no significa nada (lo ausente de un PATCH no cambia); en OpenAPI sí lo
-  // tiene un cuerpo de PUT, que es de donde suele salir. Se quitan los de primer nivel.
+  // Removes id from a body schema (5.1: the server assigns it and it does not change).
+  // §4.3: in update a default means nothing (what a PATCH omits does not change); in OpenAPI a PUT body
+  // does have one, and that is where it usually comes from. Top-level ones are removed.
   dropDefaults(s) {
     if (!isObject(s?.properties)) return false;
     let dropped = false;
@@ -1194,7 +1314,7 @@ class Context {
       ?? this.collections.find((c) => lc(this.refName(c.itemSchema) ?? '') === lc(base));
   }
 
-  // Tipo Restep (§4.2) de un filtro a partir del esquema del parámetro o del campo.
+  // Restep type (§4.2) of a filter from the parameter or field schema.
   filterType(schema0, field, c) {
     const itemProps = this.props(c.itemSchema ?? c.listItemSchema);
     const fieldSchema = this.resolve(itemProps[field]);
@@ -1217,16 +1337,16 @@ class Context {
     };
     const fromParam = pick(s);
     const fromField = fieldSchema && Object.keys(fieldSchema).length ? pick(fieldSchema) : null;
-    // El tipo del campo manda (el del parámetro suele ser string), salvo que el parámetro sea más preciso.
+    // The field type wins (the parameter's is usually string), unless the parameter is more precise.
     if (fromField && (!fromParam || fromParam.type === 'string')) return fromField;
     if (fromParam) return fromParam;
     return { type: 'string', low: true };
   }
 
-  // OpenAPI 3.0 → JSON Schema 2020-12, con los $ref locales resueltos (un ciclo se corta con {}).
+  // OpenAPI 3.0 → JSON Schema 2020-12, with local $refs resolved (a cycle is cut with {}).
   toJsonSchema(schema, stack = []) {
     const name = this.refName(schema);
-    if (name && stack.includes(name)) return { description: `Referencia circular a ${name} (recortada).` };
+    if (name && stack.includes(name)) return { description: `Circular reference to ${name} (cut).` };
     const s = this.resolve(schema);
     if (!isObject(s)) return typeof s === 'boolean' ? s : {};
     const next = name ? [...stack, name] : stack;
@@ -1246,8 +1366,8 @@ class Context {
     if (s.exclusiveMinimum === true) delete out.minimum;
     if (s.exclusiveMaximum === true) delete out.maximum;
     if (s.example !== undefined && out.examples === undefined) out.examples = [s.example];
-    // Las etiquetas de un enum (x-enumNames, de NSwag y otros) pasan a un oneOf de const con title, que
-    // es como Restep da las opciones de un formulario con su etiqueta (§4.3, apéndice A).
+    // Enum labels (x-enumNames, from NSwag and others) become a oneOf of const with title, which
+    // is how Restep gives the options of a form with their label (§4.3, appendix A).
     const names = s['x-enumNames'];
     const labelled = Array.isArray(s.enum) && Array.isArray(names) && names.length === s.enum.length && names.every((x) => typeof x === 'string');
     if (labelled) { out.oneOf = s.enum.map((v, i) => ({ const: v, title: names[i] })); delete out.enum; }
@@ -1261,7 +1381,7 @@ class Context {
     return out;
   }
 
-  // Un esquema de merge patch a partir del de un cuerpo completo: nada obligatorio y null admitido.
+  // A merge patch schema from that of a full body: nothing required and null allowed.
   mergePatchSchema(s) {
     const out = { ...s };
     delete out.required;
@@ -1291,14 +1411,14 @@ class Context {
       const fs = findings.filter((f) => f.profile === p);
       const errors = fs.filter((f) => f.severity === 'error').length;
       const warnings = fs.filter((f) => f.severity === 'warning').length;
-      if (!relevant[p]) { scores[p] = { score: null, errors, warnings, note: p === 'sync' ? 'sin indicios de sincronización en la descripción' : p === 'writes' ? 'la API no tiene escrituras' : p === 'cache' ? 'ninguna lectura documenta Cache-Control' : 'nada que evaluar' }; continue; }
+      if (!relevant[p]) { scores[p] = { score: null, errors, warnings, note: p === 'sync' ? 'no sign of sync in the description' : p === 'writes' ? 'the API has no writes' : p === 'cache' ? 'no read documents Cache-Control' : 'nothing to evaluate' }; continue; }
       let penalty = 0;
       for (const f of fs) {
         if (f.severity === 'info') continue;
         penalty += (f.severity === 'error' ? 15 : 6) + Math.min(8, 2 * (f.where.length - 1));
       }
       const score = Math.max(0, 100 - penalty);
-      scores[p] = { score, errors, warnings, note: score >= 90 ? 'casi listo' : score >= 60 ? 'trabajo moderado' : 'mucho trabajo' };
+      scores[p] = { score, errors, warnings, note: score >= 90 ? 'almost ready' : score >= 60 ? 'moderate work' : 'a lot of work' };
     }
     return {
       tool: `restep-from-openapi ${VERSION}`,
@@ -1314,84 +1434,84 @@ class Context {
   }
 }
 
-// ── Informe ─────────────────────────────────────────────────────────────────
+// ── Report ─────────────────────────────────────────────────────────────────
 
-const SEVERITY = { error: 'Error', warning: 'Aviso', info: 'Nota' };
-const PROFILE_TITLES = { core: 'core (obligatorio)', query: 'query', writes: 'writes', cache: 'cache', relations: 'relations', sync: 'sync', extensions: 'Extensiones' };
+const SEVERITY = { error: 'Error', warning: 'Warning', info: 'Note' };
+const PROFILE_TITLES = { core: 'core (required)', query: 'query', writes: 'writes', cache: 'cache', relations: 'relations', sync: 'sync', extensions: 'Extensions' };
 const MAX_WHERE = 8;
 
 export function renderReport(r, { source, validation } = {}) {
   const L = [];
-  L.push(`# ${r.api.title}: qué le falta para cumplir Restep 1`, '');
-  L.push(`Generado por ${r.tool} a partir de ${source ? `\`${source}\`` : 'una descripción'} (OpenAPI ${r.api.openapi}${r.api.version ? `, versión de la API ${r.api.version}` : ''}). `
-    + `${r.api.operations} operaciones en ${r.api.paths} rutas; ${r.collections.length} colecciones reconocidas. Raíz de la API supuesta: \`${r.api.root}\`.`, '');
-  L.push('> Es un informe orientativo: solo lee la descripción OpenAPI, no llama a la API, y deduce por nombres y esquemas. '
-    + 'Lo que la descripción no documenta (cabeceras, códigos de error) cuenta como ausente. Para comprobar un servidor de verdad, usa '
-    + '[restep-check](https://restep.wubytes.com/es/herramientas/).', '');
-  L.push('## Resumen', '');
-  L.push('| Perfil | Puntuación | Errores | Avisos | Valoración |', '|---|---|---|---|---|');
+  L.push(`# ${r.api.title}: what it needs to conform to Restep 1`, '');
+  L.push(`Generated by ${r.tool} from ${source ? `\`${source}\`` : 'a description'} (OpenAPI ${r.api.openapi}${r.api.version ? `, API version ${r.api.version}` : ''}). `
+    + `${r.api.operations} operations on ${r.api.paths} paths; ${r.collections.length} collections recognized. Assumed API root: \`${r.api.root}\`.`, '');
+  L.push('> This is an indicative report: it only reads the OpenAPI description, does not call the API, and infers from names and schemas. '
+    + 'Whatever the description does not document (headers, error codes) counts as missing. To check a real server, use '
+    + '[restep-check](https://restep.wubytes.com/tools/).', '');
+  L.push('## Summary', '');
+  L.push('| Profile | Score | Errors | Warnings | Assessment |', '|---|---|---|---|---|');
   for (const p of PROFILES) {
     const s = r.scores[p];
     L.push(`| ${p} | ${s.score === null ? '—' : `${s.score}/100`} | ${s.errors} | ${s.warnings} | ${s.note} |`);
   }
-  L.push('', 'Puntuación orientativa: 100 menos 15 por cada tipo de error y 6 por cada tipo de aviso, más 2 por cada lugar extra donde se repite (hasta 8). Las notas no restan.', '');
+  L.push('', 'Indicative score: 100 minus 15 for each kind of error and 6 for each kind of warning, plus 2 for each extra place where it repeats (up to 8). Notes do not subtract.', '');
   for (const p of [...PROFILES, 'extensions']) {
     const fs = r.findings.filter((f) => f.profile === p);
     const ps = r.passes.filter((x) => x.profile === p);
     if (!fs.length && !ps.length) continue;
     L.push(`## ${PROFILE_TITLES[p]}`, '');
     if (fs.length) {
-      L.push(p === 'extensions' ? '### Sugerencias' : '### Lo que falta', '');
+      L.push(p === 'extensions' ? '### Suggestions' : '### What is missing', '');
       for (const f of fs) {
         L.push(`- **${SEVERITY[f.severity]}: ${f.title}** ${sectionLink(f.section)} \`${f.id}\``);
         L.push(`  ${f.fix}`);
         const shown = f.where.slice(0, MAX_WHERE).map((w) => `\`${w}\``).join(', ');
-        L.push(`  Dónde: ${shown}${f.where.length > MAX_WHERE ? ` y ${f.where.length - MAX_WHERE} más` : ''}.`);
+        L.push(`  Where: ${shown}${f.where.length > MAX_WHERE ? ` and ${f.where.length - MAX_WHERE} more` : ''}.`);
       }
       L.push('');
     }
     if (ps.length) {
-      L.push('### Lo que ya cumple', '');
+      L.push('### What already conforms', '');
       for (const x of ps) L.push(`- ${x.text} ${sectionLink(x.section)}`);
       L.push('');
     }
   }
-  L.push('## Borrador del documento de descubrimiento', '');
+  L.push('## Draft discovery document', '');
   const d = r.discovery;
-  L.push(`Perfiles: ${d.profiles.join(', ')}${d.extensions ? `. Extensiones: ${d.extensions.join(', ')}` : ''}. `
-    + 'Los perfiles salen de lo que el borrador declara; anunciarlos obliga a cumplir lo que falta arriba.', '');
+  L.push(`Profiles: ${d.profiles.join(', ')}${d.extensions ? `. Extensions: ${d.extensions.join(', ')}` : ''}. `
+    + 'The profiles come from what the draft declares; announcing them requires fixing what is missing above.', '');
   const cols = Object.entries(d.collections);
   if (cols.length) {
-    L.push('| Colección | Ruta | Métodos | Elemento | Filtros | Orden | Relaciones | Acciones |', '|---|---|---|---|---|---|---|---|');
+    L.push('| Collection | Path | Methods | Item | Filters | Sort | Relations | Actions |', '|---|---|---|---|---|---|---|---|');
     for (const [name, c] of cols)
       L.push(`| ${name} | \`${c.path}\` | ${(c.methods ?? []).join(' ') || '—'} | ${(c.item_methods ?? []).join(' ') || '—'} | ${Object.keys(c.filter ?? {}).join(', ') || '—'} | ${(c.sort ?? []).join(', ') || '—'} | ${Object.keys(c.relations ?? {}).join(', ') || '—'} | ${Object.keys(c.actions ?? {}).join(', ') || '—'} |`);
     L.push('');
   }
   if (r.lowConfidence.length) {
-    L.push('Deducido con poca confianza (revísalo a mano):', '');
+    L.push('Inferred with low confidence (review it by hand):', '');
     for (const x of r.lowConfidence) L.push(`- \`${x}\``);
     L.push('');
   }
   const notes = Object.entries(d.collections).flatMap(([n, c]) => (c['x-restep-from-openapi']?.notes ?? []).map((x) => `${n}: ${x}`));
-  if (notes.length) { L.push('Notas:', ''); for (const x of notes) L.push(`- ${x}`); L.push(''); }
-  if (r.unresolvedRefs.length) L.push(`Referencias externas sin resolver (se han tratado como esquemas vacíos): ${r.unresolvedRefs.map((x) => `\`${x}\``).join(', ')}.`, '');
-  if (validation) L.push(validation.errors === null ? `Validación contra discovery.json: no hecha (${validation.reason}).`
-    : validation.errors.length ? `Validación contra discovery.json: **${validation.errors.length} errores**: ${validation.errors.slice(0, 5).map((e) => `\`${e.at}\` ${e.message}`).join('; ')}.`
-      : 'Validación contra discovery.json: correcta.', '');
+  if (notes.length) { L.push('Notes:', ''); for (const x of notes) L.push(`- ${x}`); L.push(''); }
+  if (r.unresolvedRefs.length) L.push(`Unresolved external references (treated as empty schemas): ${r.unresolvedRefs.map((x) => `\`${x}\``).join(', ')}.`, '');
+  if (validation) L.push(validation.errors === null ? `Validation against discovery.json: not done (${validation.reason}).`
+    : validation.errors.length ? `Validation against discovery.json: **${validation.errors.length} errors**: ${validation.errors.slice(0, 5).map((e) => `\`${e.at}\` ${e.message}`).join('; ')}.`
+      : 'Validation against discovery.json: passed.', '');
   return L.join('\n');
 }
 
-// ── Esquema de descubrimiento ───────────────────────────────────────────────
+// ── Discovery schema ───────────────────────────────────────────────
 
 export async function loadDiscoverySchema() {
   const here = fileURLToPath(new URL('.', import.meta.url));
   for (const p of [`${here}schema/discovery.json`]) {
-    try { return { schema: JSON.parse(await readFile(p, 'utf8')), from: p }; } catch { /* siguiente */ }
+    try { return { schema: JSON.parse(await readFile(p, 'utf8')), from: p }; } catch { /* next */ }
   }
   try {
     const r = await fetch(SCHEMA_URL, { signal: AbortSignal.timeout(10000) });
     if (r.ok) return { schema: await r.json(), from: SCHEMA_URL };
-  } catch { /* sin red */ }
+  } catch { /* no network */ }
   return null;
 }
 
@@ -1403,55 +1523,56 @@ export function stripAnnotations(v) {
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
-const USAGE = `Uso: restep-from-openapi <openapi.json|openapi.yaml|URL> [opciones]
+const USAGE = `Usage: restep-from-openapi <openapi.json|openapi.yaml|URL> [options]
 
-Lee una API descrita en OpenAPI 3.x y dice qué le falta para cumplir Restep 1, perfil a perfil,
-con una puntuación orientativa; y escribe un borrador de su documento de descubrimiento.
+Reads an API described in OpenAPI 3.x and says what it needs to conform to Restep 1, profile by
+profile, with an indicative score; and writes a draft of its discovery document.
 
-Opciones:
-  --out <archivo>     escribe el borrador del descubrimiento (JSON)
-  --report <archivo>  escribe el informe en Markdown (si no, va a la salida estándar)
-  --json              saca por la salida estándar el resultado completo en JSON en vez del informe
-  --no-schemas        no copia los esquemas de OpenAPI en schemas ni en el input de las acciones
-  --no-annotations    sin los miembros x-confidence, x-source y x-restep-from-openapi
-  --help              esta ayuda
+Options:
+  --out <file>        writes the draft discovery document (JSON)
+  --report <file>     writes the report in Markdown (otherwise it goes to standard output)
+  --json              prints the full result as JSON to standard output instead of the report
+  --no-schemas        does not copy the OpenAPI schemas into schemas or into the actions' input (an upload
+                      collection whose POST takes JSON still gets "create": {"type": "object"}, §5.1)
+  --no-annotations    leaves out the x-confidence, x-source and x-restep-from-openapi members
+  --help              this help
 
-Códigos de salida: 0 bien; 1 no se pudo leer la descripción; 2 uso incorrecto.`;
+Exit codes: 0 OK; 1 the description could not be read; 2 wrong usage.`;
 
 async function main(argv) {
   const opts = { schemas: true, annotations: true };
   let input = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    const val = () => { const v = argv[++i]; if (!v || v.startsWith('--')) usage(`${a} necesita un archivo.`); return v; };
+    const val = () => { const v = argv[++i]; if (!v || v.startsWith('--')) usage(`${a} needs a file.`); return v; };
     if (a === '--help' || a === '-h') { console.log(USAGE); return 0; }
     else if (a === '--out') opts.out = val();
     else if (a === '--report') opts.report = val();
     else if (a === '--json') opts.json = true;
     else if (a === '--no-schemas') opts.schemas = false;
     else if (a === '--no-annotations') opts.annotations = false;
-    else if (a.startsWith('--')) usage(`Opción desconocida: ${a}.`);
-    else if (input) usage('Solo se admite una descripción OpenAPI.');
+    else if (a.startsWith('--')) usage(`Unknown option: ${a}.`);
+    else if (input) usage('Only one OpenAPI description is allowed.');
     else input = a;
   }
-  if (!input) usage('Falta la descripción OpenAPI (archivo o URL).');
+  if (!input) usage('Missing the OpenAPI description (file or URL).');
   let doc;
   try { doc = await loadDocument(input); }
   catch (e) { console.error(`Error: ${e.message}`); return 1; }
   const r = analyze(doc, opts);
   const loaded = await loadDiscoverySchema();
-  const validation = loaded ? { errors: validate(loaded.schema, stripAnnotations(r.discovery)) } : { errors: null, reason: 'no se encontró el esquema ni hay red' };
+  const validation = loaded ? { errors: validate(loaded.schema, stripAnnotations(r.discovery)) } : { errors: null, reason: 'schema not found and no network' };
   r.validation = validation;
   const report = renderReport(r, { source: input, validation });
   if (opts.out) await writeFile(opts.out, JSON.stringify(r.discovery, null, 2) + '\n');
   if (opts.report) await writeFile(opts.report, report + '\n');
   if (opts.json) console.log(JSON.stringify(r, null, 2));
   else if (opts.report) {
-    console.log(`${r.api.title}: ${r.collections.length} colecciones, ${r.findings.length} hallazgos.`);
+    console.log(`${r.api.title}: ${r.collections.length} collections, ${r.findings.length} findings.`);
     for (const p of PROFILES) console.log(`  ${p.padEnd(10)} ${r.scores[p].score === null ? '   —' : String(r.scores[p].score).padStart(4)}  ${r.scores[p].note}`);
-    console.log(`Informe: ${opts.report}${opts.out ? `\nDescubrimiento: ${opts.out}` : ''}`);
+    console.log(`Report: ${opts.report}${opts.out ? `\nDiscovery: ${opts.out}` : ''}`);
   } else console.log(report);
-  if (validation.errors?.length) console.error(`Aviso: el borrador no valida contra discovery.json (${validation.errors.length} errores).`);
+  if (validation.errors?.length) console.error(`Warning: the draft does not validate against discovery.json (${validation.errors.length} errors).`);
   return 0;
 }
 

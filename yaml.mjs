@@ -1,12 +1,12 @@
-// Analizador YAML mínimo, suficiente para los documentos OpenAPI habituales. Sin dependencias.
+// Minimal YAML parser, enough for common OpenAPI documents. No dependencies.
 //
-// Admite: mapas y listas por bloques (también la lista al mismo sangrado que su clave), escalares
-// sin comillas (también en varias líneas), entre comillas simples y dobles, bloques literales `|` y
-// plegados `>` con sus indicadores (`|-`, `>+`, `|2`), colecciones en línea (`[a, b]`, `{a: 1}`,
-// también repartidas en varias líneas), comentarios, anclas `&a` y alias `*a`, la clave de fusión
-// `<<`, y los marcadores `---`, `...` y `%YAML`.
-// No admite: varios documentos en un archivo (lee el primero), claves complejas `? `, etiquetas
-// `!!tipo` (se ignoran), ni tabuladores en el sangrado.
+// Supports: block maps and lists (including a list at the same indentation as its key), plain
+// scalars (also over several lines), single- and double-quoted scalars, `|` literal and `>` folded
+// blocks with their indicators (`|-`, `>+`, `|2`), inline collections (`[a, b]`, `{a: 1}`, also
+// spread over several lines), comments, anchors `&a` and aliases `*a`, the merge key `<<`, and the
+// markers `---`, `...` and `%YAML`.
+// Does not support: several documents in one file (reads the first), complex keys `? `, tags
+// `!!type` (ignored), or tabs in indentation.
 
 export function parseYaml(text) {
   const lines = [];
@@ -16,7 +16,7 @@ export function parseYaml(text) {
     const line = raw[i];
     if (/^%/.test(line) && !started) continue;
     if (/^---(\s|$)/.test(line)) {
-      if (started) break; // solo el primer documento
+      if (started) break; // first document only
       started = true;
       const rest = line.slice(3).trim();
       if (rest && !rest.startsWith('#')) lines.push({ n: i + 1, indent: 0, text: rest, raw: rest });
@@ -25,7 +25,7 @@ export function parseYaml(text) {
     if (/^\.\.\.(\s|$)/.test(line)) break;
     const m = /^( *)(.*)$/.exec(line);
     if (/^ *\t/.test(line) && m[2].trim() && !m[2].trim().startsWith('#'))
-      throw yamlError(i + 1, 'hay un tabulador en el sangrado; YAML solo admite espacios');
+      throw yamlError(i + 1, 'tab in indentation; YAML only allows spaces');
     started = true;
     lines.push({ n: i + 1, indent: m[1].length, text: m[2], raw: line });
   }
@@ -34,17 +34,17 @@ export function parseYaml(text) {
   if (p.i >= lines.length) return null;
   const value = p.parseNode(lines[p.i].indent, -1);
   p.skipBlank();
-  if (p.i < lines.length) throw yamlError(lines[p.i].n, `no se esperaba «${lines[p.i].text.trim()}» aquí (¿sangrado incorrecto?)`);
+  if (p.i < lines.length) throw yamlError(lines[p.i].n, `unexpected "${lines[p.i].text.trim()}" here (wrong indentation?)`);
   return value;
 }
 
 function yamlError(n, msg) {
-  const e = new Error(`YAML, línea ${n}: ${msg}`);
+  const e = new Error(`YAML, line ${n}: ${msg}`);
   e.yaml = true;
   return e;
 }
 
-// Quita un comentario « #…» que no esté dentro de comillas.
+// Strips a " #…" comment that is not inside quotes.
 function stripComment(s) {
   let q = null;
   for (let i = 0; i < s.length; i++) {
@@ -56,7 +56,7 @@ function stripComment(s) {
         q = null;
       }
     } else if (c === '"' || c === "'") {
-      // Una comilla solo abre cadena al principio de un valor.
+      // A quote only opens a string at the start of a value.
       const prev = s.slice(0, i).trimEnd();
       if (i === 0 || /[:\-,[{?]$/.test(prev) || prev === '') q = c;
     } else if (c === '#' && (i === 0 || /\s/.test(s[i - 1]))) return s.slice(0, i).trimEnd();
@@ -64,7 +64,7 @@ function stripComment(s) {
   return s.trimEnd();
 }
 
-// Busca el «:» que separa clave y valor: seguido de espacio o fin de línea, fuera de comillas y corchetes.
+// Finds the ":" that separates key and value: followed by a space or end of line, outside quotes and brackets.
 function findColon(s) {
   if (s.startsWith('"') || s.startsWith("'")) {
     const q = s[0];
@@ -100,14 +100,14 @@ class Parser {
 
   peek() { this.skipBlank(); return this.lines[this.i]; }
 
-  // Un nodo que empieza en la línea actual con sangrado `indent`; `parent` es el sangrado del padre.
+  // A node that starts on the current line with indentation `indent`; `parent` is the parent's indentation.
   parseNode(indent, parent) {
     const line = this.peek();
     if (!line || line.indent <= parent) return null;
     const t = stripComment(line.text);
     if (isSeqLine(t)) return this.parseSeq(line.indent);
     if (findColon(t) >= 0) return this.parseMap(line.indent);
-    // Un escalar o una colección en línea que ocupa el bloque entero.
+    // A scalar or an inline collection that fills the whole block.
     this.i++;
     return this.inlineValue(t, line, parent);
   }
@@ -126,7 +126,7 @@ class Parser {
         out.push(next && next.indent > indent ? this.parseNode(next.indent, indent) : null);
         continue;
       }
-      // «- clave: valor» o «- - x»: se reinterpreta lo que sigue al guion como una línea más sangrada.
+      // "- key: value" or "- - x": what follows the dash is reinterpreted as a more indented line.
       const offset = line.text.indexOf(rest);
       const { anchor, body } = splitAnchor(rest);
       if (isSeqLine(body) || findColon(body) >= 0) {
@@ -150,9 +150,9 @@ class Parser {
       if (!line || line.indent !== indent) break;
       const t = stripComment(line.text);
       if (isSeqLine(t)) break;
-      if (t.startsWith('? ')) throw yamlError(line.n, 'las claves complejas («? ») no están admitidas');
+      if (t.startsWith('? ')) throw yamlError(line.n, 'complex keys ("? ") are not supported');
       const c = findColon(t);
-      if (c < 0) throw yamlError(line.n, `se esperaba «clave: valor» y llega «${t}»`);
+      if (c < 0) throw yamlError(line.n, `expected "key: value", got "${t}"`);
       const key = String(scalar(t.slice(0, c).trim(), line.n, true));
       const rest = t.slice(c + 1).trim();
       this.i++;
@@ -175,20 +175,20 @@ class Parser {
     return out;
   }
 
-  // El valor que va tras «clave:» o como nodo suelto.
+  // The value after "key:" or as a bare node.
   inlineValue(body, line, indent) {
     if (/^\*/.test(body)) {
       const name = body.slice(1).trim();
-      if (!this.anchors.has(name)) throw yamlError(line.n, `el alias «*${name}» no tiene ancla`);
+      if (!this.anchors.has(name)) throw yamlError(line.n, `alias "*${name}" has no anchor`);
       return this.anchors.get(name);
     }
     if (/^[|>]/.test(body)) return this.blockScalar(body, line, indent);
     if (/^[[{]/.test(body)) {
-      // Colección en línea, quizá repartida en varias líneas.
+      // Inline collection, possibly spread over several lines.
       let text = body;
       while (!balanced(text)) {
         const next = this.lines[this.i];
-        if (!next) throw yamlError(line.n, 'falta cerrar «[» o «{»');
+        if (!next) throw yamlError(line.n, 'unclosed "[" or "{"');
         text += ' ' + stripComment(next.text.trim());
         this.i++;
       }
@@ -198,13 +198,13 @@ class Parser {
     return this.scalarWithContinuation(body, line, indent, col);
   }
 
-  // Un escalar sin comillas puede seguir en las líneas siguientes, más sangradas que su clave.
+  // A plain scalar may continue on the following lines, indented deeper than its key.
   scalarWithContinuation(body, line, indent) {
     if (body.startsWith('"') || body.startsWith("'")) {
       let text = body;
       while (!closedQuote(text)) {
         const next = this.lines[this.i];
-        if (!next) throw yamlError(line.n, 'falta cerrar una comilla');
+        if (!next) throw yamlError(line.n, 'unclosed quote');
         text += next.text.trim() === '' ? '\n' : ' ' + next.text.trim();
         this.i++;
       }
@@ -216,7 +216,7 @@ class Parser {
       if (!next) break;
       const t = next.text.trim();
       if (t === '' ) {
-        // Una línea en blanco dentro de un escalar es un salto de línea, si el escalar sigue.
+        // A blank line inside a scalar is a line break, if the scalar continues.
         let j = this.i + 1;
         while (j < this.lines.length && this.lines[j].text.trim() === '') j++;
         const after = this.lines[j];
@@ -236,7 +236,7 @@ class Parser {
 
   blockScalar(header, line, indent) {
     const m = /^([|>])([+-]?)([1-9]?)([+-]?)\s*(#.*)?$/.exec(header);
-    if (!m) throw yamlError(line.n, `cabecera de bloque no válida «${header}»`);
+    if (!m) throw yamlError(line.n, `invalid block header "${header}"`);
     const literal = m[1] === '|';
     const chomp = m[2] || m[4];
     let blockIndent = m[3] ? indent + Number(m[3]) : null;
@@ -253,7 +253,7 @@ class Parser {
       body.push(rawText.slice(blockIndent));
       this.i++;
     }
-    // Las líneas en blanco del final no pertenecen al bloque salvo con «+».
+    // Trailing blank lines do not belong to the block unless "+" is used.
     let trailing = 0;
     while (body.length && body[body.length - 1] === '') { body.pop(); trailing++; }
     let text;
@@ -279,7 +279,7 @@ function splitAnchor(s) {
   const m = /^&([^\s]+)\s*(.*)$/.exec(s);
   let anchor = null, body = s;
   if (m) { anchor = m[1]; body = m[2]; }
-  // Las etiquetas (!!str, !Ref…) se ignoran.
+  // Tags (!!str, !Ref…) are ignored.
   body = body.replace(/^!\S*\s*/, '');
   return { anchor, body };
 }
@@ -307,17 +307,17 @@ function balanced(s) {
   return depth <= 0;
 }
 
-// Convierte un escalar a su valor, con los tipos del esquema core de YAML 1.2.
+// Converts a scalar to its value, with the types of the YAML 1.2 core schema.
 function scalar(s, n, isKey = false) {
   if (s.startsWith('"')) {
-    if (!s.endsWith('"') || s.length < 2) throw yamlError(n, 'falta cerrar la comilla doble');
+    if (!s.endsWith('"') || s.length < 2) throw yamlError(n, 'unclosed double quote');
     return s.slice(1, -1).replace(/\\(u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)/g, (_, e) => {
       if (e[0] === 'u' || e[0] === 'x') return String.fromCharCode(parseInt(e.slice(1), 16));
       return { n: '\n', t: '\t', r: '\r', '0': '\0', b: '\b', f: '\f', '"': '"', '\\': '\\', '/': '/', ' ': ' ', e: '\x1b' }[e] ?? e;
     });
   }
   if (s.startsWith("'")) {
-    if (!s.endsWith("'") || s.length < 2) throw yamlError(n, 'falta cerrar la comilla simple');
+    if (!s.endsWith("'") || s.length < 2) throw yamlError(n, 'unclosed single quote');
     return s.slice(1, -1).replace(/''/g, "'");
   }
   if (isKey) return s;
@@ -333,14 +333,14 @@ function scalar(s, n, isKey = false) {
   return s;
 }
 
-// Colecciones en línea: [a, b] y {a: 1, b: [2]}.
+// Inline collections: [a, b] and {a: 1, b: [2]}.
 class Flow {
   constructor(s, n) { this.s = s; this.i = 0; this.n = n; }
   ws() { while (/\s/.test(this.s[this.i] ?? '')) this.i++; }
   parse() {
     const v = this.value();
     this.ws();
-    if (this.i < this.s.length) throw yamlError(this.n, `sobra «${this.s.slice(this.i)}» tras la colección en línea`);
+    if (this.i < this.s.length) throw yamlError(this.n, `unexpected "${this.s.slice(this.i)}" after flow collection`);
     return v;
   }
   value() {
@@ -355,7 +355,7 @@ class Flow {
         out.push(this.value());
         this.ws();
         if (this.s[this.i] === ',') this.i++;
-        else if (this.s[this.i] !== ']') throw yamlError(this.n, 'se esperaba «,» o «]»');
+        else if (this.s[this.i] !== ']') throw yamlError(this.n, 'expected "," or "]"');
       }
     }
     if (c === '{') {
@@ -371,7 +371,7 @@ class Flow {
         out[key] = v;
         this.ws();
         if (this.s[this.i] === ',') this.i++;
-        else if (this.s[this.i] !== '}') throw yamlError(this.n, 'se esperaba «,» o «}»');
+        else if (this.s[this.i] !== '}') throw yamlError(this.n, 'expected "," or "}"');
       }
     }
     return this.atom(false);

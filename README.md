@@ -2,19 +2,19 @@
 
 Reads an API described in OpenAPI 3.0, 3.1 or 3.2 (JSON or YAML, file or URL) and produces:
 
-1. A **report** of what it lacks to comply with [Restep 1](https://restep.wubytes.com/1/),
+1. A **report** of what it lacks to comply with [Restep 1](https://w3id.org/restep/1/),
    profile by profile, with a rough score per profile. Each finding cites the section of the
    specification and the OpenAPI operations where it shows up (`GET /pets?page`,
-   `esquema Pet.id`…), and says what to do.
+   `schema Pet.id`…), and says what to do.
 2. A **draft discovery document** (§4.2) that validates against
-   [`discovery.json`](https://restep.wubytes.com/1/schema/discovery.json) and declares
-   `"restep": "1.0-draft.6"`, the text the tool follows (§1.1): collections and items from the
+   [`discovery.json`](https://w3id.org/restep/1/schema/discovery.json) and declares
+   `"restep": "1.0-draft.7"`, the text the tool follows (§1.1): collections and items from the
    paths, singletons, methods, schemas, filters, named filters, sorting, `max_limit`, relations
    and actions, with low-confidence deductions marked.
 
 It only reads the description: it does not call the API. Whatever the description does not
 document (an `ETag`, the error codes) counts as missing. To check a real server there is
-[`restep-check`](https://restep.wubytes.com/tools/). One main file plus two modules (YAML and JSON
+[`restep-check`](https://w3id.org/restep/tools/). One main file plus two modules (YAML and JSON
 Schema), Node 18+, no dependencies.
 
 ## Usage
@@ -31,7 +31,7 @@ npx restep-from-openapi https://api.example.com/openapi.yaml --json
 | `--out <file>` | Writes the draft discovery document (JSON). |
 | `--report <file>` | Writes the report in Markdown; only the score summary goes to standard output. Without it, the whole report goes to standard output. |
 | `--json` | Outputs the full result as JSON (findings, what already complies, scores, the draft and its validation). |
-| `--no-schemas` | Does not copy the OpenAPI schemas into `schemas` or into the actions' `input` (the draft gets much shorter). |
+| `--no-schemas` | Does not copy the OpenAPI schemas into `schemas` or into the actions' `input` (the draft gets much shorter); a collection with `upload` whose `POST` takes JSON still gets `"create": {"type": "object"}` (§5.1). |
 | `--no-annotations` | Without the `x-confidence`, `x-source` and `x-restep-from-openapi` members. |
 
 Exit codes: `0` fine (even with findings), `1` the description could not be read, `2` wrong usage.
@@ -79,9 +79,28 @@ it helps compare APIs and track progress, it does not certify anything.
   the naming grammar (§3).
 - **Singletons** (§5.9): a path with no variables, not hanging from a collection, whose `GET`
   returns an object and that allows nothing but `GET`, `PATCH` or `PUT` (which becomes `PATCH`),
-  such as `/me` or `/settings`. It gets `methods`, `description` and `item` and `update` schemas. A
-  standalone resource with `POST` or `DELETE`, or under a collection's path, is left outside
-  Restep with a note.
+  such as `/me` or `/settings`. It gets `methods`, `description` and `item` and `update` schemas. One
+  whose path is an item path followed by literal segments (`/readers/{id}/settings`) hangs from that
+  item: it gets `parent` and a template path (§5.9, draft 7). A standalone resource with `POST` or
+  `DELETE`, or another path under a collection's, is left outside Restep with a note.
+- **`upload`** (§5.1): a collection `POST` whose body is a file (`image/png`, `application/pdf`,
+  `application/octet-stream`…) declares `upload` with those media types, and `"multipart": true`
+  for `multipart/form-data` with a single binary part named `file`; `max_size` is left to fill in.
+  A collection whose `POST` takes no JSON at all gets a note (`core.upload.only`): a JSON body is
+  answered with `415`, which should carry `Accept-Post` (draft 7 council, decision 2). With `upload`,
+  `schemas.create` announces creation from JSON, so it is declared if and only if the `POST` also
+  takes JSON: as its schema, or `{"type": "object"}` with `--no-schemas` or without a schema; a
+  `create` from a body that is not JSON is left out. Where such a collection also takes JSON files
+  (`application/json` or `application/*`), a JSON file only travels as the `file` part of
+  `multipart/form-data`, so the draft declares `"multipart": true`, with a warning
+  (`core.upload.json-file`) if OpenAPI does not describe that body (council, round 3, decisions 1
+  and 2). A `null`-only filter is declared without `quantifier`, which round 3 (decision 8) makes
+  equivalent to `"some"`. Round 4: only `application/json` creates an item from JSON, so a `+json`
+  body (`application/ld+json`) is a file type of `upload`, with a warning (`core.upload.json-suffix`)
+  in case the body meant to create an item; `*/*` is a media range, raw or as the media type of
+  the `file` part (`encoding.file.contentType`, parameters dropped), and admits JSON files like
+  `application/*`; and a collection that only takes files whose ranges admit `application/json`,
+  also by a wildcard, takes a JSON body as a file, so it gets no `core.upload.only` note.
 - **`id_from`** (§5.1): if the creation body accepts `id` without `readOnly`, `"client"` if it is
   required and `"either"` if not, and the `id` stays in `create`.
 - **Methods**: OpenAPI's among `GET`, `POST`, `PATCH` and `DELETE`; an item `PUT` becomes `PATCH`,
@@ -92,17 +111,23 @@ it helps compare APIs and track progress, it does not certify anything.
   local `$ref` resolved; a cycle is cut. `title`, `description`, `default` and `examples` pass
   through as they are, because they are what a form uses (§4.3, appendix A); enum labels in
   `x-enumNames` become a `oneOf` of `const` with `title`, and `update` loses `default`, which means
-  nothing in a `PATCH`.
+  nothing in a `PATCH`. A `default` in `create` that its own property does not accept is reported
+  (`core.schema.default`) and left out, since Restep gives it effect (§4.3).
 - **Filters**: from the list's parameters. `filter[field][op]` and a `deepObject` `filter` are
   read as they are; free names are translated (`min_price` → `price` `ge`, `created_after` →
   `created_at` `gt`, an array → `in`). The type comes from the item's field if there is one
   (`decimal` for amounts and strings with a decimal pattern, `datetime`, `date`, `enum` with its
-  `values`). Per §6.1 it does not declare ordering operators on `id`, operators other than `eq`,
-  `ne` and `null` on a `boolean`, or a filter (or sort) on a field that is a list, through a to-many
-  relation, or down to the `id` of a subcollection item.
-- **Named filters** (§6.1): a parameter on a field that is a list (`tags`) and free-text search
-  (`q`, `search`) become `named_filters`, with `type` and a description that needs reviewing,
-  because it is what gives the filter its meaning.
+  `values`). Per §6.1 it declares only the eleven operators of the list (`nin`, `prefix` and
+  `contains` included; the last two only on strings), no ordering operators on `id`, nothing but
+  `eq`, `ne` and `null` on a `boolean`, and no filter (or sort) through a to-many relation or down to
+  the `id` of a subcollection item. A parameter on a field that is a list of scalars (`tags`) is
+  declared with `"quantifier": "some"` and the type of its elements, never with `ne` or `nin`
+  (draft 7). With `null` as its only operator it carries no `quantifier`; `null` on a to-many
+  relation (a list of objects of another collection) is declared with `type` `string`, that of the
+  related items' `id`, also without `quantifier`, and on any other list of objects it is not declared
+  (draft 7 council, decision 1).
+- **Named filters** (§6.1): free-text search (`q`, `search`) becomes `named_filters`, with `type`
+  and a description that needs reviewing, because it is what gives the filter its meaning.
 - **Sorting**: the values of `sort`/`sort_by`/`order_by` when they are an enumeration.
 - **`max_limit`**: the `maximum` of `limit`/`per_page`/`page_size`. **`count`**: `exact` if the
   list carries `total` or there is `count`/`include_total`.
@@ -149,7 +174,13 @@ They test the YAML parser, the JSON Schema validator (also against the reference
 discovery document, started on port 8881), the findings and the draft for three fixtures, which
 the draft validates against `schema/discovery.json`, an inline description with what is
 new in draft 6 (singletons, `id_from`, nested subcollections, filters §6.1 does not allow
-declaring, `Content-Type`, cache and `deprecated`), and the CLI (files, `--json`, a URL served on
+declaring, `Content-Type`, cache and `deprecated`), another with what is new in draft 7 (list
+filters with `quantifier`, operators, `upload`, an invalid `default`, a singleton with `parent`),
+another with the draft 7 council's decisions (`null` alone on a list field and on a to-many relation,
+an upload-only collection, a singleton without `method_effects`, and one with it that validates),
+another with round 3 (`create` only where the `POST` takes JSON, also with `--no-schemas`, and
+`multipart` for JSON files beside JSON creation),
+and the CLI (files, `--json`, a URL served on
 port 8880 and the errors).
 
 The fixtures in `fixtures/`:
@@ -169,8 +200,12 @@ The fixtures in `fixtures/`:
 - It deduces from names and shapes. An oddly named filter, a verb not on its list or an unusual
   list wrapper slips through or is misclassified; that is why it marks confidence.
 - It does not follow external `$ref` or `callbacks`/`links` beyond noting them.
-- It does not detect language maps (§3) or `inherit` (§11.6): in OpenAPI they cannot be told apart
-  from any other object.
+- It does not detect language maps (§3), localized fields (§3, draft 7), `inherit` or
+  `inherit_items` (§11.6): in OpenAPI they cannot be told apart from any other object or string,
+  and a localized field would also need `default_language`, which OpenAPI does not say.
+- It does not declare `upsert`, `reusable_ids`, `local_times`, `effects`, `method_effects` (neither a
+  collection's nor a singleton's `PATCH`, §5.9), `params`/`output` of actions or default and required
+  filters: OpenAPI has no way to say them.
 - What OpenAPI does not say, the draft does not declare: `collations` (§6.1; an undeclared field
   compares by code points), `idempotency.anonymous` (§7.1), `deprecations` (§5.5: the `announced`
   instant is missing; anything `deprecated` comes out as a note), `sync` (§10) or any other
@@ -188,15 +223,16 @@ list is not declared in `filter` (§6.1; the tool proposes a named filter).
 
 - **Exact or estimated `count`.** An OpenAPI description does not say; the tool assumes `exact`
   and notes it. It is not a gap in the spec, but a draft cannot know.
-- **Singleton under a collection path.** §5.9 forbids a path "that a collection or an item has or
-  may have". `/books/featured` is one (it could be an item); it is not clear whether
-  `/books/7/summary` is too, which only an undeclared subcollection could have. The tool discards
-  any path that starts with a collection's path.
+- **Singleton under a collection path.** Settled in draft 7: `/books/7/summary` is a singleton with
+  `parent` (§5.9), and `/books/featured` is still not allowed.
+- **Upload media types from `multipart/form-data`.** OpenAPI gives the part's types in
+  `encoding.file.contentType` (or `contentMediaType`); without them the tool declares
+  `application/octet-stream`, which is narrower than what the API may take.
 
 ## Code and issues
 
 Code and issues: <https://github.com/restep-spec/restep-from-openapi>. That repository is generated from the Restep
-site, where the tool is developed alongside the [specification](https://restep.wubytes.com/1/) and the reference
+site, where the tool is developed alongside the [specification](https://w3id.org/restep/1/) and the reference
 server: `vendor/` and `schema/` are copies from the site so the tests run on their own.
 
 MIT licensed.
